@@ -31,3 +31,21 @@
 - transport/ + protocol/ coverage ≥ 85% (actual: 89%) ✓
 - meta-test passes (layer boundary enforcement) ✓
 - ruff warnings = 0 ✓
+
+## Slice 2 Task Log
+
+- T-010/T-011 complete: files=[src/eou/ownership/state.py, tests/unit/ownership/test_state.py], tests=12 passed (101 total), commit=2cc7d53
+- T-012/T-013 complete: files=[tests/unit/ownership/test_transitions.py], tests=22 passed (123 total), commit=2cc7d53
+- T-014/T-015 complete: files=[src/eou/ownership/edge_detector.py, tests/unit/ownership/test_edge_detector.py], tests=15 passed (138 total), commit=99d513d
+- T-016/T-017 complete: files=[src/eou/ownership/takeback_detector.py, tests/unit/ownership/test_takeback_detector.py], tests=15 passed (153 total), commit=99d513d
+- T-018 complete: files=[src/eou/ownership/coordinator.py, tests/unit/ownership/test_coordinator.py], tests=6 passed (159 total)
+- T-019 complete: files=[tests/unit/ownership/test_acceptance_paths.py], tests=6 passed (165 total), scenarios=1,2,3,5
+
+## Slice 2 Exit
+
+- All T-010..T-019 green ✓
+- ownership/ coverage = 95.33% (target: ≥ 85%) ✓
+- Full test suite: 165 passed (89 Slice1 + 76 Slice2) ✓
+- ruff warnings = 0 ✓
+- meta-test (layer boundary) still passes ✓
+- No import of transport.tcp or input.* in ownership/ ✓
