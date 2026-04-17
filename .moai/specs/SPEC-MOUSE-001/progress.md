@@ -49,3 +49,22 @@
 - ruff warnings = 0 ✓
 - meta-test (layer boundary) still passes ✓
 - No import of transport.tcp or input.* in ownership/ ✓
+
+## Slice 3 Task Log
+
+- T-020/T-021 complete: files=[src/eou/input/backend.py, tests/fakes/mouse.py, tests/unit/input/test_backend.py], tests=17 passed (182 total)
+- T-022/T-023 complete: files=[src/eou/input/capture.py, tests/unit/input/test_capture.py], tests=6 passed (188 total)
+- T-024/T-025 complete: files=[src/eou/input/inject.py, tests/unit/input/test_inject.py], tests=8 passed (196 total)
+- T-026/T-027 complete: files=[src/eou/input/visibility.py, src/eou/input/_visibility_windows.py, tests/fakes/visibility.py, tests/unit/input/test_visibility_contract.py], tests=20 passed (216 total)
+- T-028/T-029 complete: files=[tests/unit/input/test_visibility_windows.py], tests=16 passed (232 total), pyproject.toml addopts+deps updated
+
+## Slice 3 Exit
+
+- All T-020..T-029 green ✓
+- input/ coverage: backend=100%, capture=100%, inject=100%, visibility=100%, _visibility_windows=84% (ctypes.windll not available on Linux — expected) ✓
+- Overall coverage = 92.05% (target: ≥ 85%) ✓
+- Full test suite: 232 passed (165 Slice1+2 + 67 Slice3) ✓
+- ruff warnings = 0 ✓
+- meta-test (layer boundary) still passes ✓
+- addopts="-m 'not windows'" set in pyproject.toml ✓
+- MX tags: @MX:ANCHOR on MouseBackend + CursorVisibility, @MX:WARN on WindowsCursorVisibility hook + failure path, @MX:NOTE on park_offset + FakeCursorVisibility, @MX:WARN on capture.py thread bridge ✓

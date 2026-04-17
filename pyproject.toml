@@ -21,6 +21,8 @@ dev = [
     "pytest-cov>=5",
     "hypothesis>=6",
     "ruff>=0.5",
+    "pynput>=1.7.6",
+    "screeninfo>=0.8.1",
 ]
 full = [
     "msgpack>=1.0.7",
@@ -42,6 +44,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = "-m 'not windows'"
 markers = [
     "windows: requires Windows-specific OS primitives (skipped on non-Windows)",
 ]
