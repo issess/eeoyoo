@@ -1,0 +1,72 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eou"
+version = "0.1.0"
+description = "Edge-triggered mouse ownership transfer over pluggable transport (SPEC-MOUSE-001)"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "senicy", email = "purebluecolor@gmail.com" }]
+license = { text = "MIT" }
+dependencies = [
+    "msgpack>=1.0.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5",
+    "hypothesis>=6",
+    "ruff>=0.5",
+]
+full = [
+    "msgpack>=1.0.7",
+    "pynput>=1.7.6",
+    "screeninfo>=0.8.1",
+    "pyyaml>=6.0",
+    "typer>=0.12",
+]
+windows-extra = [
+    "pywin32>=306",
+]
+
+[project.scripts]
+eou = "eou.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "windows: requires Windows-specific OS primitives (skipped on non-Windows)",
+]
+
+[tool.coverage.run]
+source = ["src/eou"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+ignore = ["UP007"]  # Allow X | Y union syntax only on 3.10+ with __future__ annotations
+
+[tool.ruff.lint.isort]
+known-first-party = ["eou"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+# Layer boundary: modules outside transport/ must NOT import transport.tcp or transport.ble directly.
+# Enforced by tests/meta/test_import_boundaries.py (ast-based) per REQ-MOUSE-TRANSPORT-003.
+# banned-module-level-imports are listed here as documentation only; enforcement is via meta-test.
+ban-relative-imports = "all"
