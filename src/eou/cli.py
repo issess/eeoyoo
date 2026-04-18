@@ -23,6 +23,10 @@ from eou.config import ConfigError, EouConfig, load_config
 
 app = typer.Typer(name="eou", add_completion=False, no_args_is_help=True)
 
+# Default config paths (relative to CWD). Used when CONFIG_PATH argument is omitted.
+_DEFAULT_HOST_CONFIG = Path("configs/eou.host.yaml")
+_DEFAULT_REMOTE_CONFIG = Path("configs/eou.remote.yaml")
+
 
 def _version_callback(value: bool) -> None:
     if value:
@@ -45,7 +49,10 @@ def _main(
 
 @app.command()
 def host(
-    config_path: Path = typer.Argument(..., help="Path to eou.yaml config file."),
+    config_path: Path = typer.Argument(
+        _DEFAULT_HOST_CONFIG,
+        help="Path to eou.yaml config file (default: configs/eou.host.yaml).",
+    ),
 ) -> None:
     """Run as HOST node.
 
@@ -69,7 +76,10 @@ def host(
 
 @app.command()
 def remote(
-    config_path: Path = typer.Argument(..., help="Path to eou.yaml config file."),
+    config_path: Path = typer.Argument(
+        _DEFAULT_REMOTE_CONFIG,
+        help="Path to eou.yaml config file (default: configs/eou.remote.yaml).",
+    ),
 ) -> None:
     """Run as REMOTE node.
 

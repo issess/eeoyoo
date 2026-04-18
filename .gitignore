@@ -211,3 +211,9 @@ dist-ssr/
 .vercel/
 .netlify/
 .firebase/
+# ===========================================
+# EOU Local Config (SPEC-MOUSE-001)
+# ===========================================
+configs/eou.host.yaml
+configs/eou.remote.yaml
+configs/eou.yaml
