@@ -68,3 +68,30 @@
 - meta-test (layer boundary) still passes ✓
 - addopts="-m 'not windows'" set in pyproject.toml ✓
 - MX tags: @MX:ANCHOR on MouseBackend + CursorVisibility, @MX:WARN on WindowsCursorVisibility hook + failure path, @MX:NOTE on park_offset + FakeCursorVisibility, @MX:WARN on capture.py thread bridge ✓
+
+## Slice 4 Task Log
+
+- T-030/T-031 complete: files=[src/eou/config.py, configs/eou.example.yaml, tests/unit/test_config.py], tests=10 passed (242 total), commit=1340009
+- T-032/T-033 complete: files=[src/eou/bridge.py, tests/unit/test_event_bridge.py], tests=7 passed (249 total), commit=ad87046
+- T-034/T-035 complete: files=[src/eou/host.py, src/eou/remote.py, tests/unit/test_host.py, tests/unit/test_remote.py], tests=32 passed (281 total), commit=3379034
+- T-035b complete: files=[tests/unit/test_cli_unit.py, tests/unit/test_host_coverage.py, tests/unit/test_remote_coverage.py], tests=22 passed (289 total, coverage boost)
+- T-036 complete: files=[src/eou/cli.py, src/eou/transport/_factory.py, tests/integration/test_cli_smoke.py, tests/integration/test_e2e_loopback.py, benchmarks/bench_latency.py], pyproject.toml pythonpath=["src"] added, commit=9ec4845
+
+## Slice 4 Exit
+
+- All T-030..T-036 green ✓
+- config.py: ConfigError, EouConfig, load_config — 10 unit tests ✓
+- bridge.py: MouseEventBridge asyncio↔thread — 7 unit tests, thread-safe boundary ✓
+- host.py: HOST orchestration — handshake, edge dwell, GRANT, MOUSE_MOVE, SESSION_END, disconnect ✓
+- remote.py: REMOTE orchestration — handshake reply, OwnershipRequest→Grant, MouseMove→inject, takeback→SESSION_END ✓
+- cli.py: typer app, host/remote subcommands, --version flag ✓
+- transport/_factory.py: make_tcp_transport() factory preserving REQ-MOUSE-TRANSPORT-003 layer boundary ✓
+- E2E loopback: Acceptance Scenarios S1/S3/S6/S7 (logical paths) verified via FakeTransport ✓
+- Full test suite: 289 passed (232 Slice1-3 + 57 Slice4) ✓
+- Overall coverage = 85.34% (target: ≥ 85%) ✓
+- ruff warnings = 0 ✓
+- meta-test (layer boundary) still passes ✓
+- MX tags: @MX:ANCHOR on Host.run(), Remote.run(), load_config(); @MX:WARN on bridge.submit() thread boundary, bridge._enqueue() backpressure, remote._takeback_loop() ✓
+- pyproject.toml pythonpath=["src"] added for system pytest compatibility ✓
+- gate.yaml test timeout extended to 180s ✓
+- SPEC-MOUSE-001 Slice 4 COMPLETE
