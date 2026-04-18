@@ -95,3 +95,29 @@
 - pyproject.toml pythonpath=["src"] added for system pytest compatibility ✓
 - gate.yaml test timeout extended to 180s ✓
 - SPEC-MOUSE-001 Slice 4 COMPLETE
+
+## Sync Phase (2026-04-19)
+
+**Status**: Documentation complete
+
+**Files Updated:**
+- `.moai/specs/SPEC-MOUSE-001/spec.md`: YAML frontmatter (status: draft → implemented, updated: 2026-04-19), HISTORY entry added, Implementation Notes section appended
+- `README.md`: Full rewrite (stub → comprehensive guide with features, quick start, configuration, architecture, roadmap)
+- `CHANGELOG.md`: New file (Keep-a-Changelog format, v0.2.0 release entry)
+- `.moai/project/tech.md`: Runtime dependencies table delta (typer promoted, Python version note added)
+- `.moai/project/structure.md`: Directory layout updated (bridge.py, _factory.py, _visibility_windows.py, fakes/, meta/ additions; role-specific config examples)
+- `.moai/specs/SPEC-MOUSE-001/progress.md`: This Sync Phase block
+
+**TRUST 5 Status**: PASS (0 critical findings)
+- Tested: 289 tests, 85.34% coverage, 122 REQ-to-test docstring mappings
+- Readable: 0 ruff warnings, full type hints, public API docstrings
+- Unified: Consistent error hierarchy, async/sync boundaries enforced, unified import order
+- Secured: Input validation gates on all external boundaries, no hardcoded secrets, no subprocess/eval/exec
+- Trackable: Conventional commits with SPEC-MOUSE-001 references, all tasks marked completed
+
+**No Breaking Changes**: Initial release (v0.2.0), no prior API contract to break
+
+**Next Steps** (Post-Sync):
+1. Git workflow: github_flow, personal mode, no auto-push (user to push manually)
+2. PR creation: User merges to main (if applicable to fork-based workflow)
+3. Future SPEC documents: SPEC-KEYBOARD-001, SPEC-BLE-001, SPEC-CLIPBOARD-001 per roadmap

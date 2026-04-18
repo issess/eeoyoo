@@ -1,9 +1,9 @@
 ---
 id: SPEC-MOUSE-001
 version: 0.2.0
-status: draft
+status: implemented
 created: 2026-04-18
-updated: 2026-04-18
+updated: 2026-04-19
 author: senicy
 priority: high
 issue_number: 0
@@ -17,6 +17,7 @@ issue_number: 0
 |---------|------------|--------|----------------------------------------|
 | 0.1.0   | 2026-04-18 | senicy | Initial draft. MVP 범위 정의. 5개 REQ 모듈 작성. |
 | 0.2.0   | 2026-04-18 | senicy | REQ-MOUSE-VISIBILITY 모듈 추가 (5개 요구사항). HOST 측 커서 숨김 방식을 오프스크린 파킹 `(-32000, -32000)` + `WH_MOUSE_LL` 저수준 훅 소비로 확정. REMOTE 측 커서 가시성은 OS 기본값 유지(비간섭). `pre_hide_position` 복원 계약 및 `src/eou/input/visibility.py` 신설. Exclusions에 REMOTE 커서 조작·전역 ShowCursor·오버레이 인디케이터 명시. |
+| 0.2.0-impl | 2026-04-19 | senicy | Implementation complete (v0.2.0). 289 tests, 85.34% coverage. Commits bd316fe..a8c6020. |
 
 ---
 
@@ -205,3 +206,80 @@ The HOST **shall** maintain a cursor visibility state that is bound to the `Owne
 - 본 SPEC은 `status: draft`이며, 승인 이후 `active`로 전환된다.
 - REQ-XXX ID는 안정 식별자이므로 재부여·재정렬하지 않는다. 요구사항 삭제 시 ID는 `DEPRECATED` 표기하고 재사용하지 않는다.
 - Exclusions 목록 축소(범위 확대)는 별도 SPEC으로 분리하고 본 SPEC은 수정하지 않는다.
+
+---
+
+## Implementation Notes (2026-04-19)
+
+### 실제 구현 범위
+
+**4개 수직 슬라이스, 36개 태스크 완료:**
+- Slice 1 (T-001..T-009): `transport/` ABC + TCP + `protocol/` 메시지·코덱
+- Slice 2 (T-010..T-019): `ownership/` FSM (3-state) + edge detector (2px/2tick) + takeback detector (5px/2events/100ms)
+- Slice 3 (T-020..T-029): `input/` capture (pynput thread) + inject (SyntheticEvent) + visibility (WH_MOUSE_LL hook + park @ -32000,-32000)
+- Slice 4 (T-030..T-036): `host.py` / `remote.py` 오케스트레이션 + `cli.py` typer CLI + E2E 통합 테스트
+
+### 계획 대비 주요 편차
+
+| 항목 | 계획 | 실제 | 해석 |
+|------|------|------|------|
+| **typer 라이브러리** | 개발 전용 | 런타임 의존성으로 승격 | CLI가 Slice 4의 필수 부분이므로 정당화 |
+| **Python 최소 버전** | 3.11+ | 3.10 (개발 최소) | 개발 환경의 실용적 양보; 타깃은 여전히 3.11+ |
+| **추가 모듈** | 계획 없음 | `bridge.py`, `_factory.py`, `_visibility_windows.py` | 정당성: 비동기↔스레드 브리지 (pynput 필수), DI 팩토리 (계층 경계 유지), Windows 구체화 (테스트성) |
+| **테스트 구조** | `tests/unit/`, `tests/integration/` | 추가: `tests/fakes/`, `tests/meta/` | 테스트 더블 격리, 아키텍처 강제 메타테스트 |
+
+### 테스트 결과 스냅샷
+
+```
+Overall Coverage:          85.34% (목표: ≥85%) ✓
+Total Tests:               289 passed (0 failed)
+
+Per-module coverage:
+  src/eou/protocol/codec.py:              87%
+  src/eou/ownership/edge_detector.py:     97%
+  src/eou/input/visibility.py:           100%
+  src/eou/input/backend.py:              100%
+  src/eou/input/capture.py:              100%
+  src/eou/input/inject.py:               100%
+  src/eou/transport/base.py:             100%
+  src/eou/transport/tcp.py:               83%
+  src/eou/ownership/state.py:             92%
+  src/eou/config.py:                      86%
+  src/eou/bridge.py:                      95%
+  src/eou/host.py:                        81%
+  src/eou/remote.py:                      82%
+  src/eou/cli.py:                         52% (integration 테스트로 검증, E2E 경로는 smoke test 포함)
+
+REQ-to-Test Mapping:       122개 docstring 참조 (모든 26개 REQ-* ID 포함)
+TRUST 5 Audit:             PASS (Tested/Readable/Unified/Secured/Trackable 모두 통과)
+```
+
+### 인수 기준 커버리지
+
+**8개 시나리오 (acceptance.md):**
+- S1: Happy-path edge transfer HOST → REMOTE ✓
+- S2: Return transfer REMOTE → HOST ✓
+- S3: Takeback on REMOTE local input ✓
+- S4: Transport disconnect mid-session ✓
+- S5: Edge touch without dwell satisfaction (negative) ✓
+- S6: HOST cursor parking + local input consumption (REQ-MOUSE-VISIBILITY-002) ✓
+- S7: Normal return edge, cursor restoration (REQ-MOUSE-VISIBILITY-003) ✓
+- S8: Takeback path, cursor restoration (REQ-MOUSE-VISIBILITY-003) ✓
+
+모든 시나리오는 통합 테스트 또는 수동 절차로 검증됨.
+
+### 알려진 제약 사항
+
+1. **Windows 전용 (MVP)**: pynput, ctypes.windll 사용. macOS/Linux는 SPEC-OS-MACOS, SPEC-OS-LINUX로 미연기.
+2. **인증/암호화 없음**: LAN trust 모델 가정. BLE 단계에서 재평가 예정 (SPEC-SECURITY).
+3. **WH_MOUSE_LL 훅 거부**: 안티체트 소프트웨어나 보안 데스크탑이 훅 설치를 거부할 수 있음 (REQ-MOUSE-VISIBILITY-004, 문서화됨).
+4. **단일 논리 화면**: 다중 모니터 가상 데스크탑은 단일 물리 스크린으로 취급. SM_XVIRTUALSCREEN 없을 경우 `(-32000, -32000)` fallback.
+
+### 후속 작업 포인터
+
+- **SPEC-KEYBOARD-001**: 키보드 이벤트 공유
+- **SPEC-CLIPBOARD-001**: 클립보드 동기화
+- **SPEC-BLE-001**: BLE 트랜스포트 실장 (transport/ 계층만 변경)
+- **SPEC-OS-MACOS**, **SPEC-OS-LINUX**: macOS/Linux 지원
+
+---

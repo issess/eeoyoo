@@ -2,20 +2,21 @@
 
 ## Language & Runtime
 
-- **Python 3.11+** (primary, per user requirement)
+- **Python 3.11+** (target, per spec.md)
+- **Python 3.10** (minimum for development; pragmatic concession for broader dev environment compatibility)
 - Type hints required throughout (`from __future__ import annotations`)
 - `asyncio` for transport I/O; input capture runs on dedicated thread (pynput requirement)
 
 ## Dependencies (MVP)
 
-| Purpose | Library | Version | Notes |
-|---|---|---|---|
-| Mouse capture + injection | `pynput` | ≥ 1.7.6 | Cross-platform; Windows uses SendInput under the hood |
-| Screen geometry | `screeninfo` | ≥ 0.8.1 | Multi-monitor bounds for edge detection |
-| Wire format | `msgpack` | ≥ 1.0.7 | Compact, fast, binary-safe; swap-friendly vs JSON |
-| Config | `pyyaml` | ≥ 6.0 | YAML config loading |
-| CLI | `typer` | ≥ 0.12 | `eou host` / `eou remote` subcommands |
-| Windows helpers (optional) | `pywin32` | ≥ 306 | Fallback for low-level events if pynput proves insufficient |
+| Purpose | Library | Version | Status | Notes |
+|---|---|---|---|---|
+| Mouse capture + injection | `pynput` | ≥ 1.7.6 | Runtime | Cross-platform; Windows uses SendInput under the hood |
+| Screen geometry | `screeninfo` | ≥ 0.8.1 | Runtime | Multi-monitor bounds for edge detection |
+| Wire format | `msgpack` | ≥ 1.0.7 | Runtime | Compact, fast, binary-safe; swap-friendly vs JSON |
+| Config | `pyyaml` | ≥ 6.0 | Runtime | YAML config loading |
+| CLI | `typer` | ≥ 0.12 | Runtime | `eou host` / `eou remote` subcommands (promoted from dev-only Slice 4) |
+| Windows helpers (optional) | `pywin32` | ≥ 306 | Optional | Fallback for low-level events if pynput proves insufficient |
 
 **Test stack:**
 - `pytest` + `pytest-asyncio`
