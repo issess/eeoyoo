@@ -151,6 +151,8 @@ class TCPTransport:
     async def connect(self, endpoint: str) -> None:
         """Connect to *endpoint* (``"host:port"`` format).
 
+        Used by the HOST role to dial the REMOTE peer.
+
         Args:
             endpoint: TCP address as ``"host:port"``, e.g. ``"127.0.0.1:9001"``.
 
@@ -160,6 +162,54 @@ class TCPTransport:
         host, _, port_str = endpoint.rpartition(":")
         port = int(port_str)
         self._reader, self._writer = await asyncio.open_connection(host, port)
+        self._closed = False
+
+    async def listen(self, endpoint: str) -> None:
+        """Bind to *endpoint* and accept exactly one incoming connection.
+
+        Used by the REMOTE role to wait for the HOST's dial.  The listening
+        socket is closed immediately after accepting the first peer
+        (MVP: single-peer session).  Host portion ``0.0.0.0`` binds on all
+        interfaces; a specific LAN IP restricts to that interface.
+
+        Args:
+            endpoint: TCP bind address as ``"host:port"``, e.g. ``"0.0.0.0:7001"``.
+
+        Raises:
+            TransportError: On bind failure.
+        """
+        host, _, port_str = endpoint.rpartition(":")
+        port = int(port_str)
+
+        loop = asyncio.get_running_loop()
+        accepted: asyncio.Future[
+            tuple[asyncio.StreamReader, asyncio.StreamWriter]
+        ] = loop.create_future()
+
+        async def _on_client(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            if not accepted.done():
+                accepted.set_result((reader, writer))
+            else:
+                # Reject additional peers (MVP: single-peer)
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except Exception:  # noqa: BLE001
+                    pass
+
+        # host="" or "0.0.0.0" binds all interfaces on asyncio.start_server.
+        bind_host: str | None = host if host not in ("", "0.0.0.0") else None
+        server = await asyncio.start_server(_on_client, bind_host, port)
+        try:
+            self._reader, self._writer = await accepted
+        finally:
+            server.close()
+            try:
+                await server.wait_closed()
+            except Exception:  # noqa: BLE001 — best-effort shutdown
+                pass
         self._closed = False
 
     async def send(self, frame: bytes) -> None:

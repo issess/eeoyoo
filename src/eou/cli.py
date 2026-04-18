@@ -153,7 +153,10 @@ async def _run_remote(cfg: EouConfig) -> None:
     from eou.remote import Remote
 
     transport = _make_transport(cfg)
-    await transport.connect(cfg.endpoint)
+    # REMOTE accepts the HOST's dial rather than dialing itself.
+    typer.echo(f"Remote listening on {cfg.endpoint} (waiting for host)...")
+    await transport.listen(cfg.endpoint)  # type: ignore[attr-defined]
+    typer.echo("Host connected.")
 
     backend = _make_backend()
     visibility = NullCursorVisibility()  # Remote never manipulates cursor
