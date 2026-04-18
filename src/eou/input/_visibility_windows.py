@@ -213,6 +213,7 @@ class WindowsCursorVisibility:
         # through MouseEventBridge.submit which already uses
         # loop.call_soon_threadsafe).
         self._on_mouse_event: Callable[[int, int, int, int], None] | None = None
+        self._on_synthetic_move: Callable[[], None] | None = None
         self._last_hook_pt: tuple[int, int] | None = None
 
     # ------------------------------------------------------------------
@@ -235,6 +236,7 @@ class WindowsCursorVisibility:
         self,
         pre_hide_position: tuple[int, int],
         on_mouse_event: Callable[[int, int, int, int], None] | None = None,
+        on_synthetic_move: Callable[[], None] | None = None,
     ) -> None:
         """Park cursor outside virtual screen and install WH_MOUSE_LL hook.
 
@@ -247,12 +249,18 @@ class WindowsCursorVisibility:
                 with (dx, dy, abs_x, abs_y) for every WM_MOUSEMOVE while
                 hidden. Callers use this to receive mouse deltas while the
                 hook consumes events (preventing them from reaching pynput).
+            on_synthetic_move: Optional callback invoked IMMEDIATELY BEFORE
+                any SetCursorPos call performed by this method (both parking
+                and show()-restore call the same hook). Callers use it to
+                tell the mouse backend "the next pynput callback is an
+                echo of our own move, mark it is_injected=True".
 
         # @MX:WARN: [AUTO] _hook_proc is invoked on the kernel message-loop thread.
         # @MX:REASON: Blocking here freezes system-wide mouse input (R-06).
         """
         self._pre_hide_position = pre_hide_position
         self._on_mouse_event = on_mouse_event
+        self._on_synthetic_move = on_synthetic_move
         self._last_hook_pt = None
         self._hidden = True
 
@@ -266,6 +274,33 @@ class WindowsCursorVisibility:
             park_x = sm_x - self._park_offset
             park_y = sm_y - self._park_offset
 
+        # SetCursorPos is a global Windows API call: pynput's listener
+        # observes it as if the user had moved the mouse, producing a
+        # spurious event with a huge delta (from the user's real cursor
+        # position to the parked coordinate). While install_hook=False,
+        # the hook that was supposed to consume that echo does not exist,
+        # so forwarding it to REMOTE triggers the takeback detector and
+        # collapses the CONTROLLING session. In that mode, skip the
+        # park entirely and leave the cursor where the user is driving
+        # it — the trade-off is "cursor visible on HOST" in exchange for
+        # a functional pipeline.
+        if not self._install_hook:
+            logger.info(
+                "WindowsCursorVisibility.hide: install_hook=False — "
+                "skipping SetCursorPos (no spurious pynput event) and "
+                "skipping WH_MOUSE_LL installation; pynput remains the "
+                "event source. pre_hide_position=%s stored for show().",
+                pre_hide_position,
+            )
+            return
+
+        # Register the upcoming synthetic move so pynput's listener can
+        # tag the echo as is_injected=True when it comes back through.
+        if self._on_synthetic_move is not None:
+            try:
+                self._on_synthetic_move()
+            except Exception:  # noqa: BLE001 — best-effort tagging hint
+                pass
         api.set_cursor_pos(park_x, park_y)
         logger.info(
             "WindowsCursorVisibility.hide: parked cursor at (%d, %d); "
@@ -273,15 +308,9 @@ class WindowsCursorVisibility:
             park_x, park_y, pre_hide_position,
         )
 
-        # Install hook only once (idempotent guard). Gated by install_hook
-        # because the WH_MOUSE_LL procedure only fires when the installing
-        # thread pumps Windows messages (which the asyncio thread does not).
-        if not self._install_hook:
-            logger.info(
-                "WindowsCursorVisibility.hide: install_hook=False — skipping "
-                "WH_MOUSE_LL installation; pynput remains the event source"
-            )
-            return
+        # Install hook only once (idempotent guard). The WH_MOUSE_LL
+        # procedure only fires when the installing thread pumps Windows
+        # messages, which is why install_hook defaults to False.
         if not self._hook_installed:
             handle = api.set_windows_hook_ex(self._hook_proc)
             if handle == 0:
@@ -325,16 +354,30 @@ class WindowsCursorVisibility:
             self._hook_installed = False
 
         if self._pre_hide_position is not None:
-            api.set_cursor_pos(*self._pre_hide_position)
-            logger.info(
-                "WindowsCursorVisibility.show: restored cursor to %s; "
-                "hook stats=%s",
-                self._pre_hide_position, self.get_hook_stats(),
-            )
+            if self._install_hook:
+                if self._on_synthetic_move is not None:
+                    try:
+                        self._on_synthetic_move()
+                    except Exception:  # noqa: BLE001
+                        pass
+                api.set_cursor_pos(*self._pre_hide_position)
+                logger.info(
+                    "WindowsCursorVisibility.show: restored cursor to %s; "
+                    "hook stats=%s",
+                    self._pre_hide_position, self.get_hook_stats(),
+                )
+            else:
+                # Matches the hide() policy: no SetCursorPos in non-hook
+                # mode. Cursor was never parked, so no restore is needed.
+                logger.info(
+                    "WindowsCursorVisibility.show: install_hook=False — "
+                    "no SetCursorPos issued (cursor was not parked)"
+                )
 
         self._hidden = False
         self._pre_hide_position = None
         self._on_mouse_event = None
+        self._on_synthetic_move = None
         self._last_hook_pt = None
 
     def is_hidden(self) -> bool:

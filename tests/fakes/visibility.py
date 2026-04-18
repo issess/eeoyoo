@@ -34,6 +34,7 @@ class FakeCursorVisibility:
         self.show_call_count: int = 0
         self.hide_call_count: int = 0
         self.on_mouse_event: Callable[[int, int, int, int], None] | None = None
+        self.on_synthetic_move: Callable[[], None] | None = None
 
     # ------------------------------------------------------------------
     # CursorVisibility Protocol
@@ -43,6 +44,7 @@ class FakeCursorVisibility:
         self,
         pre_hide_position: tuple[int, int],
         on_mouse_event: Callable[[int, int, int, int], None] | None = None,
+        on_synthetic_move: Callable[[], None] | None = None,
     ) -> None:
         """Mark hidden and record position.
 
@@ -52,6 +54,7 @@ class FakeCursorVisibility:
         """
         self.pre_hide_position = pre_hide_position
         self.on_mouse_event = on_mouse_event
+        self.on_synthetic_move = on_synthetic_move
         self.hidden = True
         self.hook_installed = True
         self.hide_call_count += 1

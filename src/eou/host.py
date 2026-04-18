@@ -200,6 +200,7 @@ class Host:
         controlling_event_count = 0
         controlling_move_frames_sent = 0
         controlling_zero_delta_skipped = 0
+        controlling_injected_skipped = 0
         # Last state we observed on the FSM; used to detect entry into
         # CONTROLLING so we can reset counters and emit a state banner.
         observed_state: OwnershipState = OwnershipState.IDLE
@@ -230,15 +231,18 @@ class Host:
                 ):
                     hook_stats = self._get_visibility_hook_stats()
                     pynput_count = self._get_pynput_event_count()
+                    injection_stats = self._get_pynput_injection_stats()
                     _logger.info(
                         "Host: CONTROLLING pipeline stats — "
                         "outbound_received=%d frames_sent=%d "
-                        "skipped_zero_delta=%d pynput_events=%s "
-                        "hook=%s",
+                        "skipped_zero_delta=%d skipped_injected=%d "
+                        "pynput_events=%s pynput_injection=%s hook=%s",
                         controlling_event_count,
                         controlling_move_frames_sent,
                         controlling_zero_delta_skipped,
+                        controlling_injected_skipped,
                         pynput_count,
+                        injection_stats,
                         hook_stats,
                     )
                     controlling_last_summary = now
@@ -275,6 +279,7 @@ class Host:
                     controlling_event_count = 0
                     controlling_move_frames_sent = 0
                     controlling_zero_delta_skipped = 0
+                    controlling_injected_skipped = 0
                     controlling_last_summary = time.monotonic()
                     _logger.info(
                         "Host: entering CONTROLLING event loop — "
@@ -284,10 +289,11 @@ class Host:
                 elif observed_state is OwnershipState.CONTROLLING:
                     _logger.info(
                         "Host: leaving CONTROLLING — received=%d sent=%d "
-                        "skipped_zero_delta=%d",
+                        "skipped_zero_delta=%d skipped_injected=%d",
                         controlling_event_count,
                         controlling_move_frames_sent,
                         controlling_zero_delta_skipped,
+                        controlling_injected_skipped,
                     )
                 observed_state = state
 
@@ -348,9 +354,19 @@ class Host:
                 if controlling_event_count == 1:
                     _logger.info(
                         "Host: first CONTROLLING event received at "
-                        "(%d, %d) dx=%d dy=%d — pipeline is live",
+                        "(%d, %d) dx=%d dy=%d injected=%s — pipeline is live",
                         event.abs_x, event.abs_y, event.dx, event.dy,
+                        event.is_injected,
                     )
+                # Do not forward our own SetCursorPos echoes (park/restore).
+                # The pynput backend tagged them is_injected=True via the
+                # register_synthetic_move hint; otherwise we would ship a
+                # huge spurious delta to REMOTE which, once re-injected
+                # there, trips the takeback detector and collapses the
+                # CONTROLLING session.
+                if event.is_injected:
+                    controlling_injected_skipped += 1
+                    continue
                 # Forward mouse movement to REMOTE
                 if event.dx != 0 or event.dy != 0:
                     await self._transport.send(
@@ -436,10 +452,14 @@ class Host:
             # The visibility hook consumes WH_MOUSE_LL events, so pynput no
             # longer receives them. Register a hook-thread callback so the
             # hook itself becomes the MouseEvent source for the outbound
-            # loop during CONTROLLING.
+            # loop during CONTROLLING. Also register the synthetic-move
+            # hint: when visibility calls SetCursorPos, pynput echoes it as
+            # a regular event — the hint lets the backend tag that echo as
+            # is_injected=True so REMOTE's takeback detector does not fire.
             self._visibility.hide(
                 pre_hide_position=pos,
                 on_mouse_event=self._forward_hook_event,
+                on_synthetic_move=self._notify_synthetic_move,
             )
 
         elif old_state is OwnershipState.CONTROLLING and new_state is OwnershipState.IDLE:
@@ -472,6 +492,25 @@ class Host:
             )
         )
 
+    def _notify_synthetic_move(self) -> None:
+        """Tell the pynput backend that we are about to move the cursor.
+
+        Called from WindowsCursorVisibility immediately before each
+        SetCursorPos. The backend adds a credit that the matching pynput
+        on_move callback will consume, tagging the echo as is_injected so
+        downstream consumers treat it as software-injected rather than
+        physical user input.
+        """
+        registrar = getattr(self._backend, "register_synthetic_move", None)
+        if registrar is None:
+            return
+        try:
+            registrar()
+        except Exception as exc:  # noqa: BLE001 — diagnostic only
+            _logger.debug(
+                "Host: register_synthetic_move raised: %r", exc, exc_info=True
+            )
+
     def _get_pynput_event_count(self) -> str:
         """Return the cumulative event count from the pynput backend, if any."""
         getter = getattr(self._backend, "event_count", None)
@@ -481,6 +520,19 @@ class Host:
             return str(getter())
         except Exception:  # noqa: BLE001 — diagnostic only
             return "error"
+
+    def _get_pynput_injection_stats(self) -> str:
+        """Return a compact summary of the backend's injection-tagging counters."""
+        getter = getattr(self._backend, "injection_stats", None)
+        if getter is None:
+            return "n/a"
+        try:
+            stats = getter()
+        except Exception:  # noqa: BLE001 — diagnostic only
+            return "error"
+        if isinstance(stats, dict):
+            return " ".join(f"{k}={v}" for k, v in stats.items())
+        return str(stats)
 
     def _get_visibility_hook_stats(self) -> str:
         """Return a compact one-line string with visibility hook counters.

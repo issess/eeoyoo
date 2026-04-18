@@ -43,6 +43,7 @@ class CursorVisibility(Protocol):
         self,
         pre_hide_position: tuple[int, int],
         on_mouse_event: HookMouseCallback | None = None,
+        on_synthetic_move: Callable[[], None] | None = None,
     ) -> None:
         """Park the cursor and consume local mouse events.
 
@@ -54,6 +55,11 @@ class CursorVisibility(Protocol):
                 thread for every WM_MOUSEMOVE while hidden. Arguments are
                 (dx, dy, abs_x, abs_y). Implementations that do not install
                 a global hook (Null, Fake) may ignore this argument.
+            on_synthetic_move: Optional callback invoked immediately before
+                any SetCursorPos call issued by this method. Backends use
+                this to pre-tag the echoing pynput callback as injected so
+                it is not confused with physical input. Ignored by no-op
+                implementations.
         """
         ...
 
@@ -86,13 +92,15 @@ class NullCursorVisibility:
         self,
         pre_hide_position: tuple[int, int],
         on_mouse_event: HookMouseCallback | None = None,
+        on_synthetic_move: Callable[[], None] | None = None,
     ) -> None:
         """Record position and mark hidden. Idempotent: updates position.
 
-        ``on_mouse_event`` is accepted for Protocol compatibility but
-        ignored (no OS hook is installed off-Windows).
+        ``on_mouse_event`` and ``on_synthetic_move`` are accepted for
+        Protocol compatibility but ignored (no OS hook is installed
+        off-Windows and no SetCursorPos is issued).
         """
-        del on_mouse_event  # unused on non-Windows backends
+        del on_mouse_event, on_synthetic_move  # unused on non-Windows backends
         self._pre_hide_position = pre_hide_position
         self._hidden = True
 
