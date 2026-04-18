@@ -14,6 +14,8 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import sys
 from pathlib import Path
 
 import typer
@@ -94,6 +96,67 @@ def _format_network_error(exc: OSError, endpoint: str, role: str) -> str:
     return "\n".join(lines)
 
 
+def _parse_port(endpoint: str) -> int | None:
+    """Extract TCP port from an endpoint string like 'host:port' or ':port'."""
+    if ":" not in endpoint:
+        return None
+    try:
+        return int(endpoint.rsplit(":", 1)[1])
+    except ValueError:
+        return None
+
+
+def _check_windows_firewall(port: int) -> tuple[bool, str | None]:
+    """Check whether an enabled inbound Allow rule exists for TCP <port> on Windows.
+
+    Returns:
+        (True,  None)         : matching rule found OR check could not be
+                                performed (fail-open to avoid false alarms).
+        (False, None)         : positively determined no matching rule exists.
+    Non-Windows platforms always return (True, None).
+    """
+    if sys.platform != "win32":
+        return True, None
+
+    # PowerShell: look for any enabled, Allow, Inbound rule whose port filter
+    # matches this TCP port (or "Any").
+    ps_script = (
+        f"$p={port};"
+        "$r=Get-NetFirewallRule -Direction Inbound -Enabled True -Action Allow "
+        "-ErrorAction SilentlyContinue;"
+        "if(-not $r){exit 2};"
+        "$m=$r|Get-NetFirewallPortFilter|Where-Object "
+        "{$_.Protocol -eq 'TCP' -and ($_.LocalPort -eq $p -or $_.LocalPort -eq 'Any')};"
+        "if($m){exit 0}else{exit 1}"
+    )
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
+            capture_output=True,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return True, None  # fail-open: can't check, don't block user
+
+    if proc.returncode == 0:
+        return True, None
+    if proc.returncode == 1:
+        return False, None
+    return True, None  # fail-open on unexpected exit codes
+
+
+def _format_firewall_warning(port: int, endpoint: str) -> str:
+    rule_name = f"eou remote {port}"
+    return (
+        f"[REMOTE] 경고: Windows 방화벽에 TCP {port} 포트 인바운드 허용 규칙이 없습니다.\n"
+        f"        HOST PC에서 이 포트로 연결을 시도하면 차단될 수 있습니다.\n"
+        "        관리자 PowerShell에서 다음 명령으로 규칙을 추가하세요:\n"
+        f"          New-NetFirewallRule -DisplayName '{rule_name}' "
+        f"-Direction Inbound -Protocol TCP -LocalPort {port} -Action Allow\n"
+        f"        (현재 endpoint: {endpoint})"
+    )
+
+
 def _version_callback(value: bool) -> None:
     if value:
         typer.echo(f"eou version {__version__}")
@@ -134,6 +197,8 @@ def host(
         typer.echo(f"Config file not found: {config_path}", err=True)
         raise typer.Exit(code=1)
 
+    typer.echo(f"[HOST] Loaded config: {config_path} (endpoint={cfg.endpoint})")
+
     try:
         asyncio.run(_run_host(cfg))
     except KeyboardInterrupt:
@@ -164,6 +229,14 @@ def remote(
         typer.echo(f"Config file not found: {config_path}", err=True)
         raise typer.Exit(code=1)
 
+    typer.echo(f"[REMOTE] Loaded config: {config_path} (endpoint={cfg.endpoint})")
+
+    port = _parse_port(cfg.endpoint)
+    if port is not None:
+        ok, _detail = _check_windows_firewall(port)
+        if not ok:
+            typer.echo(_format_firewall_warning(port, cfg.endpoint), err=True)
+
     try:
         asyncio.run(_run_remote(cfg))
     except KeyboardInterrupt:
@@ -188,7 +261,9 @@ async def _run_host(cfg: EouConfig) -> None:
     from eou.ownership.takeback_detector import TakebackConfig
 
     transport = _make_transport(cfg)
+    typer.echo(f"[HOST] Connecting to {cfg.endpoint} ...")
     await transport.connect(cfg.endpoint)
+    typer.echo(f"[HOST] Connected to {cfg.endpoint}.")
 
     backend = _make_backend()
     visibility = (
@@ -213,6 +288,10 @@ async def _run_host(cfg: EouConfig) -> None:
         visibility=visibility,
         edge_config=edge_cfg,
         takeback_config=takeback_cfg,
+    )
+    typer.echo(
+        f"[HOST] Ready. edge={edge_cfg.edge} threshold={edge_cfg.threshold_px}px "
+        f"dwell={edge_cfg.dwell_ticks}ticks. Press Ctrl+C to stop."
     )
     await h.run()
 
@@ -251,6 +330,10 @@ async def _run_remote(cfg: EouConfig) -> None:
         visibility=visibility,
         edge_config=edge_cfg,
         takeback_config=takeback_cfg,
+    )
+    typer.echo(
+        f"[REMOTE] Ready. edge={edge_cfg.edge} threshold={edge_cfg.threshold_px}px "
+        f"dwell={edge_cfg.dwell_ticks}ticks. Press Ctrl+C to stop."
     )
     await r.run()
 
