@@ -143,7 +143,12 @@ class Host:
         except (ConnectionClosedError, asyncio.CancelledError):
             pass
         except Exception as exc:
-            _logger.warning("Host.run: unexpected error: %s", exc)
+            _logger.warning(
+                "Host.run: unexpected error: %s: %r",
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
         finally:
             if self._capture:
                 self._capture.stop()

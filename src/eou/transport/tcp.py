@@ -147,6 +147,13 @@ class TCPTransport:
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._closed: bool = True
+        # Populated by listen() only. Python 3.12+ closes the StreamWriter
+        # when asyncio.start_server's client callback returns, so the accept
+        # handler must stay alive for the accepted connection's lifetime.
+        # close() signals _server_release so the handler (and the server)
+        # can be torn down cleanly.
+        self._server: asyncio.Server | None = None
+        self._server_release: asyncio.Event | None = None
 
     async def connect(self, endpoint: str) -> None:
         """Connect to *endpoint* (``"host:port"`` format).
@@ -186,11 +193,20 @@ class TCPTransport:
             tuple[asyncio.StreamReader, asyncio.StreamWriter]
         ] = loop.create_future()
 
+        # Keep the accept-handler task alive until close() is called. Without
+        # this, Python 3.12+ silently closes the StreamWriter as soon as the
+        # handler returns, which tears down the freshly accepted connection
+        # before the transport owner can use it (symptom: HOST's handshake
+        # times out waiting for REMOTE's Hello reply).
+        self._server_release = asyncio.Event()
+        release = self._server_release
+
         async def _on_client(
             reader: asyncio.StreamReader, writer: asyncio.StreamWriter
         ) -> None:
             if not accepted.done():
                 accepted.set_result((reader, writer))
+                await release.wait()
             else:
                 # Reject additional peers (MVP: single-peer)
                 writer.close()
@@ -202,14 +218,25 @@ class TCPTransport:
         # host="" or "0.0.0.0" binds all interfaces on asyncio.start_server.
         bind_host: str | None = host if host not in ("", "0.0.0.0") else None
         server = await asyncio.start_server(_on_client, bind_host, port)
+        self._server = server
         try:
             self._reader, self._writer = await accepted
-        finally:
+        except BaseException:
+            # Accept failed — release the handler and tear down the server.
+            release.set()
             server.close()
             try:
                 await server.wait_closed()
             except Exception:  # noqa: BLE001 — best-effort shutdown
                 pass
+            self._server = None
+            self._server_release = None
+            raise
+        # Stop accepting new connections now that we have our peer. The
+        # listening socket closes, but the already-accepted connection stays
+        # open because _on_client is blocked on release.wait(). The full
+        # server teardown (wait_closed) is deferred to close().
+        server.close()
         self._closed = False
 
     async def send(self, frame: bytes) -> None:
@@ -261,6 +288,10 @@ class TCPTransport:
         if self._closed:
             return
         self._closed = True
+        # Release the accept-handler (listen-only) so it can exit and allow
+        # the server to finish its shutdown below.
+        if self._server_release is not None and not self._server_release.is_set():
+            self._server_release.set()
         if self._writer is not None:
             try:
                 self._writer.close()
@@ -269,3 +300,10 @@ class TCPTransport:
                 pass
             self._writer = None
         self._reader = None
+        if self._server is not None:
+            try:
+                await self._server.wait_closed()
+            except Exception:  # noqa: BLE001 — best-effort shutdown
+                pass
+            self._server = None
+        self._server_release = None
