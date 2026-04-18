@@ -33,6 +33,10 @@ class PynputMouseBackend:
         self._controller: mouse.Controller = mouse.Controller()
         self._prev_pos: tuple[int, int] | None = None
         self._lock = threading.Lock()
+        # Cumulative count of events emitted to the user callback since
+        # start_capture(). Readable from any thread; used by HOST for
+        # diagnostic logging (no mutation from asyncio thread).
+        self._event_count: int = 0
 
     def start_capture(self, on_event: Callable[[MouseEvent], None]) -> None:
         """Begin listening for OS mouse events. Idempotent."""
@@ -52,6 +56,7 @@ class PynputMouseBackend:
                 is_injected=False,
                 ts=time.monotonic(),
             )
+            self._event_count += 1
             try:
                 on_event(ev)
             except Exception:
@@ -91,3 +96,11 @@ class PynputMouseBackend:
         """Return True if the backend is actively capturing events."""
         listener = self._listener
         return listener is not None and listener.is_alive()
+
+    def event_count(self) -> int:
+        """Return cumulative count of events delivered since start_capture().
+
+        Used by HOST for diagnostic logging to confirm that the pynput
+        listener is actually producing events while CONTROLLING.
+        """
+        return self._event_count

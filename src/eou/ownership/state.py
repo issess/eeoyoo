@@ -94,6 +94,15 @@ class OwnershipFSM:
         """Current ownership state (read-only)."""
         return self._state
 
+    @property
+    def pending_grant(self) -> bool:
+        """True after on_edge_cross_out() until the Grant arrives or FSM leaves IDLE.
+
+        Callers (host.py) consult this to suppress duplicate OwnershipRequest
+        frames while waiting for REMOTE's response.
+        """
+        return self._pending_grant
+
     def subscribe(
         self,
         callback: Callable[[OwnershipState, OwnershipState], None],

@@ -196,6 +196,14 @@ class Host:
         # (no mouse events observed for >= 1 s). Suppresses motion spam.
         last_pos: tuple[int, int] | None = None
         idle_logged: bool = False
+        # Per-CONTROLLING-session counters (reset on IDLE -> CONTROLLING).
+        controlling_event_count = 0
+        controlling_move_frames_sent = 0
+        controlling_zero_delta_skipped = 0
+        # Last state we observed on the FSM; used to detect entry into
+        # CONTROLLING so we can reset counters and emit a state banner.
+        observed_state: OwnershipState = OwnershipState.IDLE
+        controlling_last_summary = 0.0
 
         while True:
             try:
@@ -213,6 +221,27 @@ class Host:
                         self._edge_config.dwell_ticks,
                     )
                     idle_logged = True
+                # While CONTROLLING, emit a periodic diagnostic so the
+                # operator can tell whether the event pipeline is alive.
+                now = time.monotonic()
+                if (
+                    self._fsm.state is OwnershipState.CONTROLLING
+                    and now - controlling_last_summary >= 2.0
+                ):
+                    hook_stats = self._get_visibility_hook_stats()
+                    pynput_count = self._get_pynput_event_count()
+                    _logger.info(
+                        "Host: CONTROLLING pipeline stats — "
+                        "outbound_received=%d frames_sent=%d "
+                        "skipped_zero_delta=%d pynput_events=%s "
+                        "hook=%s",
+                        controlling_event_count,
+                        controlling_move_frames_sent,
+                        controlling_zero_delta_skipped,
+                        pynput_count,
+                        hook_stats,
+                    )
+                    controlling_last_summary = now
                 continue
             except Exception:
                 _logger.debug(
@@ -239,6 +268,29 @@ class Host:
 
             state = self._fsm.state
 
+            # Detect FSM state change since our last observed event, so we
+            # can reset per-session counters and log an entry banner.
+            if state is not observed_state:
+                if state is OwnershipState.CONTROLLING:
+                    controlling_event_count = 0
+                    controlling_move_frames_sent = 0
+                    controlling_zero_delta_skipped = 0
+                    controlling_last_summary = time.monotonic()
+                    _logger.info(
+                        "Host: entering CONTROLLING event loop — "
+                        "will forward MouseMove frames until state leaves "
+                        "CONTROLLING"
+                    )
+                elif observed_state is OwnershipState.CONTROLLING:
+                    _logger.info(
+                        "Host: leaving CONTROLLING — received=%d sent=%d "
+                        "skipped_zero_delta=%d",
+                        controlling_event_count,
+                        controlling_move_frames_sent,
+                        controlling_zero_delta_skipped,
+                    )
+                observed_state = state
+
             if state is OwnershipState.IDLE:
                 near = self._edge_detector._within_threshold(
                     event.abs_x, event.abs_y
@@ -262,16 +314,27 @@ class Host:
 
                 edge_event = self._edge_detector.observe(event.abs_x, event.abs_y)
                 if edge_event is not None:
-                    _logger.info(
-                        "Host: edge crossed (%s) at (%d, %d); sending "
-                        "OwnershipRequest",
-                        edge_event.name, event.abs_x, event.abs_y,
-                    )
                     in_edge_proximity = False  # detector resets internal dwell
-                    self._fsm.on_edge_cross_out()
-                    await self._transport.send(
-                        encode(OwnershipRequest(ts=time.monotonic()))
-                    )
+                    if self._fsm.pending_grant:
+                        # A prior OwnershipRequest is still awaiting Grant.
+                        # Resending would duplicate on the wire and race
+                        # the REMOTE's FSM (see REMOTE "ignored" logs).
+                        _logger.info(
+                            "Host: edge crossed (%s) at (%d, %d) while "
+                            "waiting for Grant — suppressing duplicate "
+                            "OwnershipRequest",
+                            edge_event.name, event.abs_x, event.abs_y,
+                        )
+                    else:
+                        _logger.info(
+                            "Host: edge crossed (%s) at (%d, %d); sending "
+                            "OwnershipRequest",
+                            edge_event.name, event.abs_x, event.abs_y,
+                        )
+                        self._fsm.on_edge_cross_out()
+                        await self._transport.send(
+                            encode(OwnershipRequest(ts=time.monotonic()))
+                        )
                 elif debug_events:
                     _logger.debug(
                         "Host: IDLE tick pos=(%d, %d) dwell=%d/%d near=%s",
@@ -281,6 +344,13 @@ class Host:
                     )
 
             elif state is OwnershipState.CONTROLLING:
+                controlling_event_count += 1
+                if controlling_event_count == 1:
+                    _logger.info(
+                        "Host: first CONTROLLING event received at "
+                        "(%d, %d) dx=%d dy=%d — pipeline is live",
+                        event.abs_x, event.abs_y, event.dx, event.dy,
+                    )
                 # Forward mouse movement to REMOTE
                 if event.dx != 0 or event.dy != 0:
                     await self._transport.send(
@@ -294,6 +364,9 @@ class Host:
                             )
                         )
                     )
+                    controlling_move_frames_sent += 1
+                else:
+                    controlling_zero_delta_skipped += 1
 
     # ------------------------------------------------------------------
     # Internal: inbound loop (Task B)
@@ -398,3 +471,30 @@ class Host:
                 ts=time.monotonic(),
             )
         )
+
+    def _get_pynput_event_count(self) -> str:
+        """Return the cumulative event count from the pynput backend, if any."""
+        getter = getattr(self._backend, "event_count", None)
+        if getter is None:
+            return "n/a"
+        try:
+            return str(getter())
+        except Exception:  # noqa: BLE001 — diagnostic only
+            return "error"
+
+    def _get_visibility_hook_stats(self) -> str:
+        """Return a compact one-line string with visibility hook counters.
+
+        Tolerates backends that do not expose hook stats (NullCursorVisibility,
+        FakeCursorVisibility, non-Windows) by falling back to "n/a".
+        """
+        getter = getattr(self._visibility, "get_hook_stats", None)
+        if getter is None:
+            return "n/a"
+        try:
+            stats = getter()
+        except Exception:  # noqa: BLE001 — diagnostic only
+            return "error"
+        if isinstance(stats, dict):
+            return " ".join(f"{k}={v}" for k, v in stats.items())
+        return str(stats)

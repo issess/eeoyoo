@@ -181,6 +181,7 @@ class WindowsCursorVisibility:
         self,
         api: WindowsAPI | None = None,
         park_offset: int = 1000,
+        install_hook: bool = False,
     ) -> None:
         # _api is resolved lazily in _get_api() so that the class is
         # instantiable on Linux (where ctypes.windll does not exist) when
@@ -188,10 +189,24 @@ class WindowsCursorVisibility:
         self._api_injected: WindowsAPI | None = api
         self._api_resolved: WindowsAPI | None = None
         self._park_offset = park_offset
+        # install_hook gates the WH_MOUSE_LL installation. The low-level
+        # hook only fires when the installing thread has a Windows message
+        # loop. asyncio.ProactorEventLoop on Windows uses IOCP and does
+        # NOT pump Windows messages, so the hook stays dormant AND blocks
+        # pynput (which does pump messages on its own listener thread).
+        # Default False: park cursor only. Set True only from a context
+        # that runs a message loop on the installing thread.
+        self._install_hook = install_hook
         self._hidden: bool = False
         self._pre_hide_position: tuple[int, int] | None = None
         self._hook_handle: int = 0
         self._hook_installed: bool = False
+        # Diagnostic counters for get_hook_stats(). Incremented atomically
+        # under the GIL; safe to read from the asyncio thread.
+        self._hook_call_count: int = 0
+        self._hook_move_count: int = 0
+        self._hook_forward_count: int = 0
+        self._hook_forward_errors: int = 0
         # Hook-thread callback set by hide(). Receives (dx, dy, abs_x, abs_y)
         # for every WM_MOUSEMOVE while hidden. Runs on the OS hook thread —
         # any downstream processing MUST be thread-safe (HOST routes this
@@ -252,8 +267,21 @@ class WindowsCursorVisibility:
             park_y = sm_y - self._park_offset
 
         api.set_cursor_pos(park_x, park_y)
+        logger.info(
+            "WindowsCursorVisibility.hide: parked cursor at (%d, %d); "
+            "will restore to %s on show()",
+            park_x, park_y, pre_hide_position,
+        )
 
-        # Install hook only once (idempotent guard)
+        # Install hook only once (idempotent guard). Gated by install_hook
+        # because the WH_MOUSE_LL procedure only fires when the installing
+        # thread pumps Windows messages (which the asyncio thread does not).
+        if not self._install_hook:
+            logger.info(
+                "WindowsCursorVisibility.hide: install_hook=False — skipping "
+                "WH_MOUSE_LL installation; pynput remains the event source"
+            )
+            return
         if not self._hook_installed:
             handle = api.set_windows_hook_ex(self._hook_proc)
             if handle == 0:
@@ -276,6 +304,11 @@ class WindowsCursorVisibility:
             else:
                 self._hook_handle = handle
                 self._hook_installed = True
+                logger.info(
+                    "WindowsCursorVisibility.hide: WH_MOUSE_LL hook "
+                    "installed (handle=0x%x)",
+                    handle,
+                )
 
     def show(self) -> None:
         """Remove hook and restore cursor to pre_hide_position.
@@ -293,6 +326,11 @@ class WindowsCursorVisibility:
 
         if self._pre_hide_position is not None:
             api.set_cursor_pos(*self._pre_hide_position)
+            logger.info(
+                "WindowsCursorVisibility.show: restored cursor to %s; "
+                "hook stats=%s",
+                self._pre_hide_position, self.get_hook_stats(),
+            )
 
         self._hidden = False
         self._pre_hide_position = None
@@ -322,12 +360,14 @@ class WindowsCursorVisibility:
         HARD CONSTRAINT: Do not block, acquire Python locks with contention,
         or perform any I/O here.  See @MX:WARN above.
         """
+        self._hook_call_count += 1
         callback = self._on_mouse_event
         if (
             nCode >= 0
             and wParam == WM_MOUSEMOVE
             and callback is not None
         ):
+            self._hook_move_count += 1
             try:
                 mhs = ctypes.cast(
                     lParam, ctypes.POINTER(_MSLLHOOKSTRUCT)
@@ -338,9 +378,33 @@ class WindowsCursorVisibility:
                 dx = 0 if last is None else x - last[0]
                 dy = 0 if last is None else y - last[1]
                 callback(dx, dy, x, y)
+                self._hook_forward_count += 1
             except Exception:
                 # Never let a downstream error crash the hook thread —
                 # a stalled hook freezes system-wide mouse input.
-                pass
+                self._hook_forward_errors += 1
         # Consume all events while hidden
         return 1
+
+    # ------------------------------------------------------------------
+    # Diagnostics
+    # ------------------------------------------------------------------
+
+    def get_hook_stats(self) -> dict[str, int | bool]:
+        """Return cumulative hook-thread counters for diagnostics.
+
+        Keys:
+            installed:       True when a WH_MOUSE_LL hook is currently
+                             registered with the OS.
+            call_count:      Total hook procedure invocations observed.
+            move_count:      Invocations where wParam == WM_MOUSEMOVE.
+            forward_count:   Successful deliveries to on_mouse_event.
+            forward_errors:  Exceptions swallowed by the hook thread guard.
+        """
+        return {
+            "installed": self._hook_installed,
+            "call_count": self._hook_call_count,
+            "move_count": self._hook_move_count,
+            "forward_count": self._hook_forward_count,
+            "forward_errors": self._hook_forward_errors,
+        }
