@@ -276,27 +276,19 @@ class WindowsCursorVisibility:
 
         # SetCursorPos is a global Windows API call: pynput's listener
         # observes it as if the user had moved the mouse, producing a
-        # spurious event with a huge delta (from the user's real cursor
-        # position to the parked coordinate). While install_hook=False,
-        # the hook that was supposed to consume that echo does not exist,
-        # so forwarding it to REMOTE triggers the takeback detector and
-        # collapses the CONTROLLING session. In that mode, skip the
-        # park entirely and leave the cursor where the user is driving
-        # it — the trade-off is "cursor visible on HOST" in exchange for
-        # a functional pipeline.
-        if not self._install_hook:
-            logger.info(
-                "WindowsCursorVisibility.hide: install_hook=False — "
-                "skipping SetCursorPos (no spurious pynput event) and "
-                "skipping WH_MOUSE_LL installation; pynput remains the "
-                "event source. pre_hide_position=%s stored for show().",
-                pre_hide_position,
+        # spurious echo event with a huge delta. The on_synthetic_move
+        # callback lets the pynput backend pre-tag that echo as
+        # is_injected=True so the outbound loop drops it and REMOTE's
+        # takeback detector is not triggered. We therefore ALWAYS park,
+        # regardless of install_hook, because injection tagging alone is
+        # enough to prevent the cascade.
+        if self._on_synthetic_move is None:
+            logger.warning(
+                "WindowsCursorVisibility.hide: no on_synthetic_move "
+                "callback wired — SetCursorPos echo will NOT be tagged "
+                "is_injected. Forwarded to REMOTE may trip takeback."
             )
-            return
-
-        # Register the upcoming synthetic move so pynput's listener can
-        # tag the echo as is_injected=True when it comes back through.
-        if self._on_synthetic_move is not None:
+        else:
             try:
                 self._on_synthetic_move()
             except Exception:  # noqa: BLE001 — best-effort tagging hint
@@ -310,7 +302,18 @@ class WindowsCursorVisibility:
 
         # Install hook only once (idempotent guard). The WH_MOUSE_LL
         # procedure only fires when the installing thread pumps Windows
-        # messages, which is why install_hook defaults to False.
+        # messages, which is why install_hook defaults to False — the
+        # asyncio ProactorEventLoop does not pump messages. Without the
+        # hook the cursor will drift back into view on the user's next
+        # physical motion (event is captured via pynput and forwarded to
+        # REMOTE, but Windows also commits the cursor movement locally).
+        if not self._install_hook:
+            logger.info(
+                "WindowsCursorVisibility.hide: install_hook=False — "
+                "skipping WH_MOUSE_LL installation; pynput remains the "
+                "event source. Cursor may un-park on user motion."
+            )
+            return
         if not self._hook_installed:
             handle = api.set_windows_hook_ex(self._hook_proc)
             if handle == 0:
@@ -354,25 +357,21 @@ class WindowsCursorVisibility:
             self._hook_installed = False
 
         if self._pre_hide_position is not None:
-            if self._install_hook:
-                if self._on_synthetic_move is not None:
-                    try:
-                        self._on_synthetic_move()
-                    except Exception:  # noqa: BLE001
-                        pass
-                api.set_cursor_pos(*self._pre_hide_position)
-                logger.info(
-                    "WindowsCursorVisibility.show: restored cursor to %s; "
-                    "hook stats=%s",
-                    self._pre_hide_position, self.get_hook_stats(),
-                )
-            else:
-                # Matches the hide() policy: no SetCursorPos in non-hook
-                # mode. Cursor was never parked, so no restore is needed.
-                logger.info(
-                    "WindowsCursorVisibility.show: install_hook=False — "
-                    "no SetCursorPos issued (cursor was not parked)"
-                )
+            # Matches hide(): always restore via SetCursorPos. The
+            # synthetic_move hint ensures the pynput echo is tagged as
+            # injected so it is not re-forwarded or mis-detected as a
+            # new edge crossing.
+            if self._on_synthetic_move is not None:
+                try:
+                    self._on_synthetic_move()
+                except Exception:  # noqa: BLE001
+                    pass
+            api.set_cursor_pos(*self._pre_hide_position)
+            logger.info(
+                "WindowsCursorVisibility.show: restored cursor to %s; "
+                "hook stats=%s",
+                self._pre_hide_position, self.get_hook_stats(),
+            )
 
         self._hidden = False
         self._pre_hide_position = None

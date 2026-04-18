@@ -308,6 +308,12 @@ class Host:
                 observed_state = state
 
             if state is OwnershipState.IDLE:
+                # Skip edge detection on our own SetCursorPos echoes
+                # (visibility.show restore on CONTROLLING -> IDLE). Without
+                # this guard the restored position can sit inside the edge
+                # threshold band and re-trigger a fresh CROSS_OUT.
+                if event.is_injected:
+                    continue
                 near = self._edge_detector._within_threshold(
                     event.abs_x, event.abs_y
                 )
