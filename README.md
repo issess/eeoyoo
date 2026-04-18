@@ -37,6 +37,13 @@ eou host   --config configs/eou.example.yaml # on the HOST PC
 eou remote --config configs/eou.example.yaml # on the REMOTE PC
 ```
 
+> **Windows (Korean locale) note**: if you see `UnicodeEncodeError: 'cp949' codec ...`,
+> set UTF-8 mode in the current shell:
+> ```powershell
+> $env:PYTHONUTF8 = "1"
+> ```
+> The provided `install.ps1` already does this for verification.
+
 ## Design
 
 Core specification: [SPEC-MOUSE-001](.moai/specs/SPEC-MOUSE-001/spec.md)

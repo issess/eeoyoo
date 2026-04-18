@@ -3,6 +3,11 @@
 
 $ErrorActionPreference = "Stop"
 
+# Force UTF-8 for Python stdout/stderr to avoid cp949 UnicodeEncodeError on Korean Windows
+$env:PYTHONIOENCODING = "utf-8"
+$env:PYTHONUTF8 = "1"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $ProjectRoot
 

@@ -40,7 +40,7 @@ def _main(
         help="Print version and exit.",
     ),
 ) -> None:
-    """EOU — Edge-triggered mouse ownership transfer (SPEC-MOUSE-001)."""
+    """EOU - Edge-triggered mouse ownership transfer (SPEC-MOUSE-001)."""
 
 
 @app.command()
