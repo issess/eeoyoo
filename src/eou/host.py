@@ -188,10 +188,15 @@ class Host:
         assert self._fsm is not None
 
         event_count = 0
-        debug_events = _logger.isEnabledFor(logging.DEBUG)
         # Tracks whether the cursor is currently inside the edge proximity
         # band so we can log enter/leave transitions exactly once.
         in_edge_proximity = False
+        # Tracks whether CROSS_OUT already fired for the *current* proximity
+        # entry. While True we stop feeding the detector, so neither the
+        # INFO "edge crossed" banner nor the DEBUG dwell ticks spam while
+        # the user holds the cursor at the edge. Reset on proximity exit
+        # so a fresh approach is detected normally.
+        edge_crossed_in_window = False
         # Idle-position logging: emit one INFO line per stable position
         # (no mouse events observed for >= 1 s). Suppresses motion spam.
         last_pos: tuple[int, int] | None = None
@@ -213,13 +218,18 @@ class Host:
                 )
             except asyncio.TimeoutError:
                 if last_pos is not None and not idle_logged:
+                    near_at_idle = self._edge_detector._within_threshold(
+                        last_pos[0], last_pos[1]
+                    )
                     _logger.info(
                         "Host: cursor idle 1s at pos=(%d, %d) state=%s "
-                        "dwell=%d/%d",
+                        "dwell=%d/%d near=%s crossed_in_window=%s",
                         last_pos[0], last_pos[1],
                         self._fsm.state.name,
                         self._edge_detector._dwell_count,
                         self._edge_config.dwell_ticks,
+                        near_at_idle,
+                        edge_crossed_in_window,
                     )
                     idle_logged = True
                 # While CONTROLLING, emit a periodic diagnostic so the
@@ -310,6 +320,7 @@ class Host:
                         self._edge_config.screen_bounds,
                     )
                     in_edge_proximity = True
+                    edge_crossed_in_window = False
                 elif not near and in_edge_proximity:
                     _logger.info(
                         "Host: mouse left edge proximity at (%d, %d) — "
@@ -317,37 +328,39 @@ class Host:
                         event.abs_x, event.abs_y,
                     )
                     in_edge_proximity = False
+                    edge_crossed_in_window = False
 
-                edge_event = self._edge_detector.observe(event.abs_x, event.abs_y)
-                if edge_event is not None:
-                    in_edge_proximity = False  # detector resets internal dwell
-                    if self._fsm.pending_grant:
-                        # A prior OwnershipRequest is still awaiting Grant.
-                        # Resending would duplicate on the wire and race
-                        # the REMOTE's FSM (see REMOTE "ignored" logs).
-                        _logger.info(
-                            "Host: edge crossed (%s) at (%d, %d) while "
-                            "waiting for Grant — suppressing duplicate "
-                            "OwnershipRequest",
-                            edge_event.name, event.abs_x, event.abs_y,
-                        )
-                    else:
-                        _logger.info(
-                            "Host: edge crossed (%s) at (%d, %d); sending "
-                            "OwnershipRequest",
-                            edge_event.name, event.abs_x, event.abs_y,
-                        )
-                        self._fsm.on_edge_cross_out()
-                        await self._transport.send(
-                            encode(OwnershipRequest(ts=time.monotonic()))
-                        )
-                elif debug_events:
-                    _logger.debug(
-                        "Host: IDLE tick pos=(%d, %d) dwell=%d/%d near=%s",
-                        event.abs_x, event.abs_y,
-                        self._edge_detector._dwell_count,
-                        self._edge_config.dwell_ticks, near,
+                # Feed the detector only while inside proximity and before
+                # a CROSS_OUT has already fired in this approach. This
+                # suppresses the repeated "edge crossed ... suppressing
+                # duplicate" spam while the user holds the cursor at the
+                # edge waiting for REMOTE's Grant.
+                if near and not edge_crossed_in_window:
+                    edge_event = self._edge_detector.observe(
+                        event.abs_x, event.abs_y
                     )
+                    if edge_event is not None:
+                        edge_crossed_in_window = True
+                        if self._fsm.pending_grant:
+                            _logger.info(
+                                "Host: edge crossed (%s) at (%d, %d) while "
+                                "waiting for Grant — suppressing duplicate "
+                                "OwnershipRequest",
+                                edge_event.name, event.abs_x, event.abs_y,
+                            )
+                        else:
+                            _logger.info(
+                                "Host: edge crossed (%s) at (%d, %d); "
+                                "sending OwnershipRequest",
+                                edge_event.name, event.abs_x, event.abs_y,
+                            )
+                            self._fsm.on_edge_cross_out()
+                            await self._transport.send(
+                                encode(OwnershipRequest(ts=time.monotonic()))
+                            )
+                # Per-event DEBUG ticks are intentionally omitted: the
+                # once-per-1s idle INFO line above already captures pos,
+                # state, dwell, near, and crossed_in_window.
 
             elif state is OwnershipState.CONTROLLING:
                 controlling_event_count += 1
