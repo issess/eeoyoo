@@ -28,6 +28,72 @@ _DEFAULT_HOST_CONFIG = Path("configs/eou.host.yaml")
 _DEFAULT_REMOTE_CONFIG = Path("configs/eou.remote.yaml")
 
 
+def _format_network_error(exc: OSError, endpoint: str, role: str) -> str:
+    """Translate common OS-level socket errors into a user-friendly diagnostic.
+
+    Returns a short, actionable message (Korean) instead of dumping a raw
+    asyncio traceback. Covers the Windows error codes we see most often
+    on LAN setups.
+    """
+    code = getattr(exc, "winerror", None) or exc.errno
+
+    # Generic header
+    header = f"[{role}] 연결 실패: {endpoint} (error {code}: {exc.strerror or exc})"
+
+    if code in (121, 10060):  # WinError 121 semaphore timeout / 10060 timed out
+        cause = "원격 PC에서 응답이 없습니다 (SYN 타임아웃)."
+        hints = [
+            "1. REMOTE PC에서 `eou remote`가 실행 중인지 확인",
+            "2. REMOTE의 `ipconfig`로 확인한 LAN IP와 endpoint가 일치하는지 확인",
+            "3. REMOTE의 Windows 방화벽이 해당 포트(TCP)를 허용하는지 확인",
+            "   (관리자 PS) New-NetFirewallRule -DisplayName 'eou remote' "
+            "-Direction Inbound -Protocol TCP -LocalPort <port> -Action Allow",
+            "4. 두 PC가 같은 서브넷/네트워크에 있는지 `ping <remote-ip>` 로 확인",
+        ]
+    elif code == 1214:  # invalid network name — e.g. dialing 0.0.0.0
+        cause = "유효하지 않은 dial 대상입니다 (0.0.0.0 같은 주소로는 연결할 수 없음)."
+        hints = [
+            "1. HOST의 endpoint는 REMOTE의 실제 LAN IP여야 합니다 "
+            "(예: 192.168.1.5:7001)",
+            "2. REMOTE의 endpoint만 0.0.0.0:<port> (모든 인터페이스 listen) 가능합니다",
+        ]
+    elif code in (10061, 111):  # connection refused
+        cause = "대상 포트는 열려 있지 않습니다 (상대가 listen 중이 아님)."
+        hints = [
+            "1. REMOTE PC에서 `eou remote`를 먼저 실행하세요",
+            "2. REMOTE의 endpoint 포트와 HOST의 endpoint 포트가 같은지 확인",
+        ]
+    elif code in (10013, 13):  # permission denied (port in use / firewall)
+        cause = "해당 포트에 바인드할 권한이 없거나 이미 사용 중입니다."
+        hints = [
+            "1. `netstat -ano | findstr :<port>` 로 점유 프로세스 확인",
+            "2. 1024 미만 포트는 관리자 권한이 필요합니다 — 7001 등 > 1024 사용",
+        ]
+    elif code in (10048, 98):  # address already in use
+        cause = "해당 포트가 이미 다른 프로세스에 의해 사용 중입니다."
+        hints = [
+            "1. `netstat -ano | findstr :<port>` 로 점유 PID 확인 후 종료",
+            "2. 다른 포트 번호로 endpoint 변경",
+        ]
+    elif code in (11001, -2, -3, 8):  # host not found / name resolution
+        cause = "호스트 이름을 해석할 수 없습니다."
+        hints = [
+            "1. endpoint가 도메인 이름이라면 IP 주소로 바꿔 보세요",
+            "2. `ping <host>` 로 이름 해석 여부 확인",
+        ]
+    else:
+        cause = "원인을 특정할 수 없는 네트워크 오류입니다."
+        hints = [
+            f"1. 상대 endpoint `{endpoint}` 에 도달 가능한지 `ping` / "
+            f"`Test-NetConnection <host> -Port <port>` 로 확인",
+            "2. 방화벽/VPN/네트워크 어댑터 설정 확인",
+        ]
+
+    lines = [header, f"원인: {cause}", "확인 사항:"]
+    lines.extend(f"  {h}" for h in hints)
+    return "\n".join(lines)
+
+
 def _version_callback(value: bool) -> None:
     if value:
         typer.echo(f"eou version {__version__}")
@@ -72,6 +138,9 @@ def host(
         asyncio.run(_run_host(cfg))
     except KeyboardInterrupt:
         typer.echo("Host stopped.")
+    except OSError as exc:
+        typer.echo(_format_network_error(exc, cfg.endpoint, "HOST"), err=True)
+        raise typer.Exit(code=2)
 
 
 @app.command()
@@ -99,6 +168,9 @@ def remote(
         asyncio.run(_run_remote(cfg))
     except KeyboardInterrupt:
         typer.echo("Remote stopped.")
+    except OSError as exc:
+        typer.echo(_format_network_error(exc, cfg.endpoint, "REMOTE"), err=True)
+        raise typer.Exit(code=2)
 
 
 # ---------------------------------------------------------------------------
