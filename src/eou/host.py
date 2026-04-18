@@ -188,15 +188,32 @@ class Host:
         assert self._fsm is not None
 
         event_count = 0
-        last_heartbeat = 0.0
         debug_events = _logger.isEnabledFor(logging.DEBUG)
         # Tracks whether the cursor is currently inside the edge proximity
         # band so we can log enter/leave transitions exactly once.
         in_edge_proximity = False
+        # Idle-position logging: emit one INFO line per stable position
+        # (no mouse events observed for >= 1 s). Suppresses motion spam.
+        last_pos: tuple[int, int] | None = None
+        idle_logged: bool = False
 
         while True:
             try:
-                event: object = await self._bridge.receive()
+                event: object = await asyncio.wait_for(
+                    self._bridge.receive(), timeout=1.0
+                )
+            except asyncio.TimeoutError:
+                if last_pos is not None and not idle_logged:
+                    _logger.info(
+                        "Host: cursor idle 1s at pos=(%d, %d) state=%s "
+                        "dwell=%d/%d",
+                        last_pos[0], last_pos[1],
+                        self._fsm.state.name,
+                        self._edge_detector._dwell_count,
+                        self._edge_config.dwell_ticks,
+                    )
+                    idle_logged = True
+                continue
             except Exception:
                 _logger.debug(
                     "Host: bridge.receive raised; outbound loop exiting",
@@ -208,23 +225,17 @@ class Host:
                 continue
 
             event_count += 1
-            now = time.monotonic()
             if event_count == 1:
                 _logger.info(
                     "Host: first mouse event received at (%d, %d); "
                     "edge_detector is now observing",
                     event.abs_x, event.abs_y,
                 )
-            if now - last_heartbeat > 1.0:
-                _logger.info(
-                    "Host: outbound heartbeat count=%d pos=(%d, %d) state=%s "
-                    "dwell=%d/%d",
-                    event_count, event.abs_x, event.abs_y,
-                    self._fsm.state.name,
-                    self._edge_detector._dwell_count,
-                    self._edge_config.dwell_ticks,
-                )
-                last_heartbeat = now
+
+            new_pos = (event.abs_x, event.abs_y)
+            if new_pos != last_pos:
+                idle_logged = False
+            last_pos = new_pos
 
             state = self._fsm.state
 
