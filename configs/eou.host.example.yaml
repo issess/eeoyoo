@@ -1,0 +1,39 @@
+# eou.host.example.yaml — SPEC-MOUSE-001 MVP configuration for HOST role
+#
+# The HOST PC physically owns the keyboard/mouse. It detects edge dwell,
+# connects to the REMOTE peer over TCP, and forwards input events.
+#
+# Copy to eou.yaml on the HOST PC and run: eou host eou.yaml
+#
+# Known limitations:
+#   - No encryption or authentication (LAN trust assumed — REQ-MOUSE-SECURITY Known Limitation).
+#   - Anti-cheat / Secure Desktop may reject WH_MOUSE_LL hook installation (R-08).
+#   - Single logical screen assumed; multi-monitor with negative virtual coords uses
+#     (-32000, -32000) fallback if SM_XVIRTUALSCREEN is unavailable (R-07).
+
+# Node role: this node owns the physical input devices.
+role: host
+
+# TCP endpoint of the REMOTE peer ("ip:port").
+# HOST dials this address; the REMOTE PC must be listening on the same port.
+# Replace with the REMOTE PC's LAN IP.
+endpoint: "192.168.1.5:7001"
+
+# Edge detection configuration (HOST side).
+# threshold_px: cursor must be within this many pixels of the screen edge to count.
+# dwell_ticks: cursor must remain within threshold for this many consecutive poll ticks
+#              before handoff to REMOTE is triggered.
+edge:
+  threshold_px: 2
+  dwell_ticks: 2
+
+# Takeback detection (unused on HOST but kept for symmetric config parsing).
+takeback:
+  pixel_threshold: 5
+  event_count_threshold: 2
+  time_window_ms: 100
+
+# Hide the HOST cursor while in CONTROLLING state.
+# Uses SetCursorPos to park at the virtual-screen corner + WH_MOUSE_LL to consume events.
+# Set to false only for debugging.
+hide_cursor: true
