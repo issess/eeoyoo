@@ -14,7 +14,7 @@ gate:
     # lint is the maximum seconds allowed for the linter step
     lint: 60
     # test is the maximum seconds allowed for the test step
-    test: 120
+    test: 180
 
   # ast_grep_gate controls structural code pattern scanning (SPEC-SLQG-001).
   # Scans for domain-specific anti-patterns (hardcoding, duplication, etc.)

@@ -15,8 +15,6 @@ from __future__ import annotations
 import asyncio
 import time
 
-import pytest
-
 from eou.input.backend import MouseEvent
 from eou.ownership.edge_detector import EdgeConfig
 from eou.ownership.takeback_detector import TakebackConfig
@@ -82,7 +80,7 @@ class TestRemoteOwnershipRequest:
     async def test_ownership_request_triggers_grant(self) -> None:
         """Receiving OwnershipRequest causes Remote to send OwnershipGrant."""
         from eou.protocol.codec import decode, encode
-        from eou.protocol.messages import Hello, OwnershipGrant, OwnershipRequest
+        from eou.protocol.messages import Hello, OwnershipRequest
         from eou.remote import Remote
 
         remote_t, host_t = FakeTransport.make_pair()
@@ -193,7 +191,10 @@ class TestRemoteTakeback:
             # Inject physical (non-injected) local input → trigger takeback
             for _ in range(3):
                 backend.feed_event(
-                    MouseEvent(dx=3, dy=2, abs_x=100, abs_y=200, is_injected=False, ts=time.monotonic())
+                    MouseEvent(
+                        dx=3, dy=2, abs_x=100, abs_y=200,
+                        is_injected=False, ts=time.monotonic(),
+                    )
                 )
                 await asyncio.sleep(0.01)
 

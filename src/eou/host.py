@@ -39,7 +39,7 @@ from eou.input.capture import MouseCapture
 from eou.input.visibility import CursorVisibility
 from eou.ownership.edge_detector import EdgeConfig, EdgeDetector
 from eou.ownership.state import OwnershipFSM, OwnershipState
-from eou.ownership.takeback_detector import TakebackConfig, TakebackDetector
+from eou.ownership.takeback_detector import TakebackConfig
 from eou.protocol.codec import decode, encode
 from eou.protocol.messages import (
     Hello,

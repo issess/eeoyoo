@@ -19,10 +19,7 @@ from __future__ import annotations
 import asyncio
 import time
 
-import pytest
-
 from eou.input.backend import MouseEvent
-from eou.input.visibility import NullCursorVisibility
 from eou.ownership.edge_detector import EdgeConfig
 from eou.ownership.takeback_detector import TakebackConfig
 from tests.fakes.mouse import FakeMouseBackend
@@ -96,7 +93,7 @@ class TestHostEdgeTransfer:
         """Feeding 2 consecutive events at the right edge sends OwnershipRequest."""
         from eou.host import Host
         from eou.protocol.codec import decode, encode
-        from eou.protocol.messages import Hello, OwnershipRequest
+        from eou.protocol.messages import Hello
 
         host_t, remote_t = _make_fake_transport_pair()
         visibility = FakeCursorVisibility()
@@ -123,7 +120,10 @@ class TestHostEdgeTransfer:
             # Feed edge events to trigger CROSS_OUT after dwell
             for _ in range(3):
                 backend.feed_event(
-                    MouseEvent(dx=0, dy=0, abs_x=1918, abs_y=540, is_injected=False, ts=time.monotonic())
+                    MouseEvent(
+                        dx=0, dy=0, abs_x=1918, abs_y=540,
+                        is_injected=False, ts=time.monotonic(),
+                    )
                 )
                 await asyncio.sleep(0.02)
 
@@ -167,7 +167,10 @@ class TestHostEdgeTransfer:
             # Trigger edge dwell
             for _ in range(3):
                 backend.feed_event(
-                    MouseEvent(dx=0, dy=0, abs_x=1918, abs_y=540, is_injected=False, ts=time.monotonic())
+                    MouseEvent(
+                        dx=0, dy=0, abs_x=1918, abs_y=540,
+                        is_injected=False, ts=time.monotonic(),
+                    )
                 )
                 await asyncio.sleep(0.02)
 
@@ -211,7 +214,10 @@ class TestHostEdgeTransfer:
             # Trigger edge dwell
             for _ in range(3):
                 backend.feed_event(
-                    MouseEvent(dx=0, dy=0, abs_x=1918, abs_y=540, is_injected=False, ts=time.monotonic())
+                    MouseEvent(
+                        dx=0, dy=0, abs_x=1918, abs_y=540,
+                        is_injected=False, ts=time.monotonic(),
+                    )
                 )
                 await asyncio.sleep(0.02)
 
@@ -222,7 +228,10 @@ class TestHostEdgeTransfer:
             # Feed movement events while CONTROLLING
             for i in range(3):
                 backend.feed_event(
-                    MouseEvent(dx=5, dy=3, abs_x=1918, abs_y=540, is_injected=False, ts=time.monotonic())
+                    MouseEvent(
+                        dx=5, dy=3, abs_x=1918, abs_y=540,
+                        is_injected=False, ts=time.monotonic(),
+                    )
                 )
                 await asyncio.sleep(0.02)
 
@@ -271,7 +280,10 @@ class TestHostSessionEnd:
 
             for _ in range(3):
                 backend.feed_event(
-                    MouseEvent(dx=0, dy=0, abs_x=1918, abs_y=540, is_injected=False, ts=time.monotonic())
+                    MouseEvent(
+                        dx=0, dy=0, abs_x=1918, abs_y=540,
+                        is_injected=False, ts=time.monotonic(),
+                    )
                 )
                 await asyncio.sleep(0.02)
 
@@ -329,7 +341,10 @@ class TestHostTransportDisconnect:
 
             for _ in range(3):
                 backend.feed_event(
-                    MouseEvent(dx=0, dy=0, abs_x=1918, abs_y=540, is_injected=False, ts=time.monotonic())
+                    MouseEvent(
+                        dx=0, dy=0, abs_x=1918, abs_y=540,
+                        is_injected=False, ts=time.monotonic(),
+                    )
                 )
                 await asyncio.sleep(0.02)
 
