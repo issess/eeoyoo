@@ -17,13 +17,12 @@ import pytest
 
 from eou.ownership.takeback_detector import TakebackConfig, TakebackDetector
 
-
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
 
 
-def make_clock(start: float = 0.0) -> "FakeClock":
+def make_clock(start: float = 0.0) -> FakeClock:
     return FakeClock(start)
 
 

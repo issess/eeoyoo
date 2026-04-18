@@ -16,7 +16,6 @@ import pytest
 
 from eou.ownership.edge_detector import EdgeConfig, EdgeDetector, EdgeEvent
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -171,7 +170,7 @@ class TestEdgeConfigOverrides:
         det.observe(1915, 500)  # tick 1
         det.observe(1916, 500)  # tick 2
         # Still no emit after only 2 ticks with dwell_ticks=3
-        result_2 = det.observe(1914, 500)  # ...wait, need result at tick 2
+        det.observe(1914, 500)  # tick 3 (separate detector used below)
         # Re-run in isolation
         det2 = EdgeDetector(cfg)
         det2.observe(1915, 500)  # tick 1

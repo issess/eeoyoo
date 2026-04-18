@@ -9,7 +9,8 @@ layer (host.py / remote.py in Slice 4).
 
 REQ-MOUSE-OWNERSHIP-001: Exactly three mutually exclusive states.
 REQ-MOUSE-OWNERSHIP-002: IDLE + GRANT_RECEIVED → CONTROLLED.
-REQ-MOUSE-OWNERSHIP-003: IDLE + on_edge_cross_out() → pending; pending + GRANT_RECEIVED → CONTROLLING.
+REQ-MOUSE-OWNERSHIP-003: IDLE + on_edge_cross_out() → pending; pending + GRANT_RECEIVED →
+    CONTROLLING.
 REQ-MOUSE-OWNERSHIP-004: CONTROLLING/CONTROLLED + SESSION_END → IDLE.
 REQ-MOUSE-OWNERSHIP-005: CONTROLLED → IDLE emits unlock signal.
 REQ-MOUSE-OWNERSHIP-006: CONTROLLING + GRANT_RECEIVED → discard + emit conflict SESSION_END.
@@ -17,9 +18,8 @@ REQ-MOUSE-OWNERSHIP-006: CONTROLLING + GRANT_RECEIVED → discard + emit conflic
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from enum import Enum
-from typing import Callable
-
 
 # ---------------------------------------------------------------------------
 # State enum

@@ -19,7 +19,6 @@ import dataclasses
 from enum import Enum
 from typing import Literal
 
-
 # ---------------------------------------------------------------------------
 # EdgeEvent
 # ---------------------------------------------------------------------------
@@ -51,7 +50,7 @@ class EdgeConfig:
     dwell_ticks: int = 2
 
     @classmethod
-    def from_dict(cls, data: dict[str, object]) -> "EdgeConfig":
+    def from_dict(cls, data: dict[str, object]) -> EdgeConfig:
         """Construct EdgeConfig from a plain dict.
 
         Raises:
