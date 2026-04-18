@@ -13,6 +13,8 @@ REQ-MOUSE-VISIBILITY-003: show() while not hidden is a no-op but counts.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
+
 
 class FakeCursorVisibility:
     """In-memory CursorVisibility implementation for tests.
@@ -31,12 +33,17 @@ class FakeCursorVisibility:
         self.hook_installed: bool = False
         self.show_call_count: int = 0
         self.hide_call_count: int = 0
+        self.on_mouse_event: Callable[[int, int, int, int], None] | None = None
 
     # ------------------------------------------------------------------
     # CursorVisibility Protocol
     # ------------------------------------------------------------------
 
-    def hide(self, pre_hide_position: tuple[int, int]) -> None:
+    def hide(
+        self,
+        pre_hide_position: tuple[int, int],
+        on_mouse_event: Callable[[int, int, int, int], None] | None = None,
+    ) -> None:
         """Mark hidden and record position.
 
         Idempotent: if called while already hidden, updates pre_hide_position
@@ -44,6 +51,7 @@ class FakeCursorVisibility:
         question resolution — new transition preempts in-flight restore).
         """
         self.pre_hide_position = pre_hide_position
+        self.on_mouse_event = on_mouse_event
         self.hidden = True
         self.hook_installed = True
         self.hide_call_count += 1

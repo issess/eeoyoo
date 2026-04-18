@@ -34,8 +34,29 @@ WH_MOUSE_LL: int = 14
 SM_XVIRTUALSCREEN: int = 76
 SM_YVIRTUALSCREEN: int = 77
 
+# Windows mouse message constants (winuser.h)
+WM_MOUSEMOVE: int = 0x0200
+
 # Fallback park coordinate (REQ-MOUSE-VISIBILITY-002 default, R-07 fallback)
 _FALLBACK_PARK: tuple[int, int] = (-32000, -32000)
+
+
+class _POINT(ctypes.Structure):
+    """Windows POINT struct (LONG x, LONG y)."""
+
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+class _MSLLHOOKSTRUCT(ctypes.Structure):
+    """Windows MSLLHOOKSTRUCT passed via lParam to WH_MOUSE_LL callbacks."""
+
+    _fields_ = [
+        ("pt", _POINT),
+        ("mouseData", ctypes.c_ulong),
+        ("flags", ctypes.c_ulong),
+        ("time", ctypes.c_ulong),
+        ("dwExtraInfo", ctypes.c_void_p),
+    ]
 
 
 @runtime_checkable
@@ -171,6 +192,13 @@ class WindowsCursorVisibility:
         self._pre_hide_position: tuple[int, int] | None = None
         self._hook_handle: int = 0
         self._hook_installed: bool = False
+        # Hook-thread callback set by hide(). Receives (dx, dy, abs_x, abs_y)
+        # for every WM_MOUSEMOVE while hidden. Runs on the OS hook thread —
+        # any downstream processing MUST be thread-safe (HOST routes this
+        # through MouseEventBridge.submit which already uses
+        # loop.call_soon_threadsafe).
+        self._on_mouse_event: Callable[[int, int, int, int], None] | None = None
+        self._last_hook_pt: tuple[int, int] | None = None
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -188,16 +216,29 @@ class WindowsCursorVisibility:
     # CursorVisibility Protocol implementation
     # ------------------------------------------------------------------
 
-    def hide(self, pre_hide_position: tuple[int, int]) -> None:
+    def hide(
+        self,
+        pre_hide_position: tuple[int, int],
+        on_mouse_event: Callable[[int, int, int, int], None] | None = None,
+    ) -> None:
         """Park cursor outside virtual screen and install WH_MOUSE_LL hook.
 
         Idempotent: if called while already hidden, updates pre_hide_position
         and re-parks the cursor (handles re-entry during 50 ms restore window).
 
+        Args:
+            pre_hide_position: Cursor position to restore on show().
+            on_mouse_event: Optional callback invoked from the hook thread
+                with (dx, dy, abs_x, abs_y) for every WM_MOUSEMOVE while
+                hidden. Callers use this to receive mouse deltas while the
+                hook consumes events (preventing them from reaching pynput).
+
         # @MX:WARN: [AUTO] _hook_proc is invoked on the kernel message-loop thread.
         # @MX:REASON: Blocking here freezes system-wide mouse input (R-06).
         """
         self._pre_hide_position = pre_hide_position
+        self._on_mouse_event = on_mouse_event
+        self._last_hook_pt = None
         self._hidden = True
 
         # Compute park coordinate (R-07 multi-monitor mitigation)
@@ -255,6 +296,8 @@ class WindowsCursorVisibility:
 
         self._hidden = False
         self._pre_hide_position = None
+        self._on_mouse_event = None
+        self._last_hook_pt = None
 
     def is_hidden(self) -> bool:
         """Return True when the cursor is currently parked."""
@@ -270,8 +313,34 @@ class WindowsCursorVisibility:
         Returns 1 to consume the event (prevent forwarding to next hook / app).
         This callback is invoked on the dedicated hook thread's message loop.
 
+        While a ``on_mouse_event`` callback is registered (set by ``hide()``),
+        WM_MOUSEMOVE events are decoded from MSLLHOOKSTRUCT and forwarded as
+        (dx, dy, abs_x, abs_y). The callback itself must be non-blocking and
+        thread-safe (HOST uses MouseEventBridge.submit, which hops to the
+        asyncio loop via call_soon_threadsafe).
+
         HARD CONSTRAINT: Do not block, acquire Python locks with contention,
         or perform any I/O here.  See @MX:WARN above.
         """
+        callback = self._on_mouse_event
+        if (
+            nCode >= 0
+            and wParam == WM_MOUSEMOVE
+            and callback is not None
+        ):
+            try:
+                mhs = ctypes.cast(
+                    lParam, ctypes.POINTER(_MSLLHOOKSTRUCT)
+                ).contents
+                x, y = int(mhs.pt.x), int(mhs.pt.y)
+                last = self._last_hook_pt
+                self._last_hook_pt = (x, y)
+                dx = 0 if last is None else x - last[0]
+                dy = 0 if last is None else y - last[1]
+                callback(dx, dy, x, y)
+            except Exception:
+                # Never let a downstream error crash the hook thread —
+                # a stalled hook freezes system-wide mouse input.
+                pass
         # Consume all events while hidden
         return 1

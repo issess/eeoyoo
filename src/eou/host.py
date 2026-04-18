@@ -360,7 +360,41 @@ class Host:
         if old_state is OwnershipState.IDLE and new_state is OwnershipState.CONTROLLING:
             # Capture current position before hiding
             pos = self._backend.get_position()
-            self._visibility.hide(pre_hide_position=pos)
+            # The visibility hook consumes WH_MOUSE_LL events, so pynput no
+            # longer receives them. Register a hook-thread callback so the
+            # hook itself becomes the MouseEvent source for the outbound
+            # loop during CONTROLLING.
+            self._visibility.hide(
+                pre_hide_position=pos,
+                on_mouse_event=self._forward_hook_event,
+            )
 
         elif old_state is OwnershipState.CONTROLLING and new_state is OwnershipState.IDLE:
             self._visibility.show()
+
+    # ------------------------------------------------------------------
+    # Internal: WH_MOUSE_LL hook-thread callback (Windows only)
+    # ------------------------------------------------------------------
+
+    def _forward_hook_event(
+        self, dx: int, dy: int, abs_x: int, abs_y: int
+    ) -> None:
+        """Bridge a mouse event observed on the OS hook thread to asyncio.
+
+        Invoked from the WH_MOUSE_LL hook thread while the visibility
+        layer is hiding the cursor. ``bridge.submit`` is thread-safe via
+        ``loop.call_soon_threadsafe``, so this call does not cross the
+        thread/asyncio boundary directly.
+        """
+        if self._bridge is None:
+            return
+        self._bridge.submit(
+            MouseEvent(
+                dx=dx,
+                dy=dy,
+                abs_x=abs_x,
+                abs_y=abs_y,
+                is_injected=False,
+                ts=time.monotonic(),
+            )
+        )

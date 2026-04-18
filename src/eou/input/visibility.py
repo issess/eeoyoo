@@ -19,7 +19,14 @@ REQ-MOUSE-VISIBILITY-005: No-op for CONTROLLED state on HOST (2-node MVP).
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from typing import Protocol, runtime_checkable
+
+# Optional callback fed by the WH_MOUSE_LL hook on Windows while the
+# cursor is hidden. Arguments: (dx, dy, abs_x, abs_y). Allows HOST to
+# receive mouse deltas from the hook itself during CONTROLLING, since
+# the hook consumes events before they reach pynput's listener.
+HookMouseCallback = Callable[[int, int, int, int], None]
 
 
 @runtime_checkable
@@ -32,13 +39,21 @@ class CursorVisibility(Protocol):
         - FakeCursorVisibility: deterministic test double (tests/fakes/visibility.py).
     """
 
-    def hide(self, pre_hide_position: tuple[int, int]) -> None:
+    def hide(
+        self,
+        pre_hide_position: tuple[int, int],
+        on_mouse_event: HookMouseCallback | None = None,
+    ) -> None:
         """Park the cursor and consume local mouse events.
 
         Args:
             pre_hide_position: OS cursor coordinates recorded just before
                 the IDLE→CONTROLLING transition.  Used to restore the cursor
                 when show() is called (REQ-MOUSE-VISIBILITY-003).
+            on_mouse_event: Optional callback invoked from the OS hook
+                thread for every WM_MOUSEMOVE while hidden. Arguments are
+                (dx, dy, abs_x, abs_y). Implementations that do not install
+                a global hook (Null, Fake) may ignore this argument.
         """
         ...
 
@@ -67,8 +82,17 @@ class NullCursorVisibility:
         self._hidden: bool = False
         self._pre_hide_position: tuple[int, int] | None = None
 
-    def hide(self, pre_hide_position: tuple[int, int]) -> None:
-        """Record position and mark hidden. Idempotent: updates position."""
+    def hide(
+        self,
+        pre_hide_position: tuple[int, int],
+        on_mouse_event: HookMouseCallback | None = None,
+    ) -> None:
+        """Record position and mark hidden. Idempotent: updates position.
+
+        ``on_mouse_event`` is accepted for Protocol compatibility but
+        ignored (no OS hook is installed off-Windows).
+        """
+        del on_mouse_event  # unused on non-Windows backends
         self._pre_hide_position = pre_hide_position
         self._hidden = True
 
