@@ -6,9 +6,34 @@ remote user can reclaim it instantly with any physical mouse input.
 
 ## Quick Start
 
+EOU uses [uv](https://docs.astral.sh/uv/) for Python environment management.
+
+### Windows (one-shot installer)
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install.ps1
+# or double-click scripts\install.bat
+```
+
+The script installs `uv` if missing, creates `.venv`, and installs `eou[full,windows-extra]`
+in editable mode.
+
+### Linux / macOS / manual
+
 ```bash
-pip install -e ".[full]"
-eou host --config configs/eou.example.yaml   # on the HOST PC
+# 1. install uv (skip if already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 2. create venv and install eou
+uv venv
+uv pip install -e ".[full]"
+```
+
+### Run
+
+```bash
+source .venv/bin/activate                    # Windows: .\.venv\Scripts\Activate.ps1
+eou host   --config configs/eou.example.yaml # on the HOST PC
 eou remote --config configs/eou.example.yaml # on the REMOTE PC
 ```
 
