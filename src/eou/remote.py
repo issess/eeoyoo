@@ -110,12 +110,25 @@ class Remote:
             queue=lambda ev: self._bridge.submit(ev),
         )
 
+        # Log FSM transitions for visibility (Remote never manipulates the
+        # cursor but state changes are useful for operators tracking
+        # ownership transfer during a session).
+        self._fsm.subscribe(self._on_state_change)
+
         try:
             # Step 1: Handshake — await HOST hello
+            _logger.info("Remote: awaiting Hello(role=host) from peer")
             await self._do_handshake()
+            _logger.info(
+                "Remote: handshake complete; Hello(role=remote, version=%s) sent",
+                _VERSION,
+            )
 
             # Start capture
             self._capture.start()
+            _logger.info(
+                "Remote: mouse capture started (takeback detection armed)"
+            )
 
             # Step 2: Concurrent tasks
             task_a = asyncio.create_task(self._takeback_loop())
@@ -217,25 +230,56 @@ class Remote:
         assert self._fsm is not None
         assert self._injector is not None
 
+        frame_count = 0
+        move_count = 0
+        last_heartbeat = 0.0
+
         while True:
             try:
                 raw = await self._transport.recv()
-            except ConnectionClosedError:
-                _logger.info("Remote: transport disconnected")
+            except ConnectionClosedError as exc:
+                _logger.info(
+                    "Remote: transport disconnected (%s); exiting inbound loop",
+                    exc,
+                )
                 if self._fsm.state is not OwnershipState.IDLE:
                     self._fsm.on_session_end(reason="transport_disconnect")
                 break
             except Exception as exc:
-                _logger.warning("Remote: inbound error: %s", exc)
+                _logger.warning(
+                    "Remote: inbound error: %r; exiting inbound loop",
+                    exc, exc_info=True,
+                )
                 if self._fsm.state is not OwnershipState.IDLE:
                     self._fsm.on_session_end(reason="transport_disconnect")
                 break
 
+            frame_count += 1
             try:
                 msg = decode(raw)
             except Exception as exc:
-                _logger.warning("Remote: decode error (frame discarded): %s", exc)
+                _logger.warning(
+                    "Remote: decode error (frame %d discarded): %s",
+                    frame_count, exc,
+                )
                 continue
+
+            if isinstance(msg, MouseMove):
+                move_count += 1
+                now = time.monotonic()
+                if now - last_heartbeat > 1.0:
+                    _logger.info(
+                        "Remote: inbound heartbeat frames=%d moves=%d state=%s "
+                        "last_delta=(%d,%d)",
+                        frame_count, move_count, self._fsm.state.name,
+                        msg.dx, msg.dy,
+                    )
+                    last_heartbeat = now
+            else:
+                _logger.info(
+                    "Remote: inbound %s received (state=%s)",
+                    type(msg).__name__, self._fsm.state.name,
+                )
 
             await self._dispatch_inbound(msg)
 
@@ -246,6 +290,9 @@ class Remote:
 
         if isinstance(msg, OwnershipRequest):
             if self._fsm.state is OwnershipState.IDLE:
+                _logger.info(
+                    "Remote: OwnershipRequest accepted; sending OwnershipGrant"
+                )
                 self._fsm.on_ownership_request_received()
                 self._fsm.on_grant_sent()
                 try:
@@ -253,7 +300,14 @@ class Remote:
                         encode(OwnershipGrant(ts=time.monotonic()))
                     )
                 except ConnectionClosedError:
-                    pass
+                    _logger.warning(
+                        "Remote: failed to send OwnershipGrant — connection closed"
+                    )
+            else:
+                _logger.info(
+                    "Remote: OwnershipRequest ignored in state %s",
+                    self._fsm.state.name,
+                )
 
         elif isinstance(msg, MouseMove):
             if self._fsm.state is OwnershipState.CONTROLLED:
@@ -264,4 +318,23 @@ class Remote:
 
         elif isinstance(msg, SessionEnd):
             if self._fsm.state is not OwnershipState.IDLE:
+                _logger.info(
+                    "Remote: SessionEnd received (reason=%s); returning to IDLE",
+                    msg.reason,
+                )
                 self._fsm.on_session_end(reason=msg.reason)
+
+    # ------------------------------------------------------------------
+    # Internal: FSM state change callback (logging only)
+    # ------------------------------------------------------------------
+
+    def _on_state_change(
+        self,
+        old_state: OwnershipState,
+        new_state: OwnershipState,
+    ) -> None:
+        """Log FSM transitions. Remote never manipulates cursor visibility."""
+        _logger.info(
+            "Remote: FSM state change %s -> %s",
+            old_state.name, new_state.name,
+        )

@@ -120,11 +120,19 @@ class Host:
 
         try:
             # Step 1: Handshake
+            _logger.info("Host: sending Hello(role=host, version=%s)", _VERSION)
             await self._transport.send(encode(Hello(version=_VERSION, role="host")))
             await self._do_handshake()
+            _logger.info("Host: handshake complete; peer is REMOTE")
 
             # Start capture
             self._capture.start()
+            _logger.info(
+                "Host: mouse capture started (edge=%s screen_bounds=%s "
+                "threshold_px=%d dwell_ticks=%d)",
+                self._edge_config.edge, self._edge_config.screen_bounds,
+                self._edge_config.threshold_px, self._edge_config.dwell_ticks,
+            )
 
             # Step 2: Concurrent tasks
             task_a = asyncio.create_task(self._outbound_loop())
@@ -179,24 +187,86 @@ class Host:
         assert self._bridge is not None
         assert self._fsm is not None
 
+        event_count = 0
+        last_heartbeat = 0.0
+        debug_events = _logger.isEnabledFor(logging.DEBUG)
+        # Tracks whether the cursor is currently inside the edge proximity
+        # band so we can log enter/leave transitions exactly once.
+        in_edge_proximity = False
+
         while True:
             try:
                 event: object = await self._bridge.receive()
             except Exception:
+                _logger.debug(
+                    "Host: bridge.receive raised; outbound loop exiting",
+                    exc_info=True,
+                )
                 break
 
             if not isinstance(event, MouseEvent):
                 continue
 
+            event_count += 1
+            now = time.monotonic()
+            if event_count == 1:
+                _logger.info(
+                    "Host: first mouse event received at (%d, %d); "
+                    "edge_detector is now observing",
+                    event.abs_x, event.abs_y,
+                )
+            if now - last_heartbeat > 1.0:
+                _logger.info(
+                    "Host: outbound heartbeat count=%d pos=(%d, %d) state=%s "
+                    "dwell=%d/%d",
+                    event_count, event.abs_x, event.abs_y,
+                    self._fsm.state.name,
+                    self._edge_detector._dwell_count,
+                    self._edge_config.dwell_ticks,
+                )
+                last_heartbeat = now
+
             state = self._fsm.state
 
             if state is OwnershipState.IDLE:
+                near = self._edge_detector._within_threshold(
+                    event.abs_x, event.abs_y
+                )
+                if near and not in_edge_proximity:
+                    _logger.info(
+                        "Host: mouse entered %s edge proximity at (%d, %d) "
+                        "(threshold=%dpx bounds=%s) — dwell counting started",
+                        self._edge_config.edge, event.abs_x, event.abs_y,
+                        self._edge_config.threshold_px,
+                        self._edge_config.screen_bounds,
+                    )
+                    in_edge_proximity = True
+                elif not near and in_edge_proximity:
+                    _logger.info(
+                        "Host: mouse left edge proximity at (%d, %d) — "
+                        "dwell reset",
+                        event.abs_x, event.abs_y,
+                    )
+                    in_edge_proximity = False
+
                 edge_event = self._edge_detector.observe(event.abs_x, event.abs_y)
                 if edge_event is not None:
-                    # Edge cross-out: send OwnershipRequest
+                    _logger.info(
+                        "Host: edge crossed (%s) at (%d, %d); sending "
+                        "OwnershipRequest",
+                        edge_event.name, event.abs_x, event.abs_y,
+                    )
+                    in_edge_proximity = False  # detector resets internal dwell
                     self._fsm.on_edge_cross_out()
                     await self._transport.send(
                         encode(OwnershipRequest(ts=time.monotonic()))
+                    )
+                elif debug_events:
+                    _logger.debug(
+                        "Host: IDLE tick pos=(%d, %d) dwell=%d/%d near=%s",
+                        event.abs_x, event.abs_y,
+                        self._edge_detector._dwell_count,
+                        self._edge_config.dwell_ticks, near,
                     )
 
             elif state is OwnershipState.CONTROLLING:
@@ -273,6 +343,9 @@ class Host:
         new_state: OwnershipState,
     ) -> None:
         """React to FSM transitions: hide/show cursor."""
+        _logger.info(
+            "Host: FSM state change %s -> %s", old_state.name, new_state.name
+        )
         if old_state is OwnershipState.IDLE and new_state is OwnershipState.CONTROLLING:
             # Capture current position before hiding
             pos = self._backend.get_position()

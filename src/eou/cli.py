@@ -14,6 +14,8 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -23,7 +25,24 @@ import typer
 from eou import __version__
 from eou.config import ConfigError, EouConfig, load_config
 
+_logger = logging.getLogger("eou.cli")
+
 app = typer.Typer(name="eou", add_completion=False, no_args_is_help=True)
+
+
+def _init_logging() -> None:
+    """Configure root logging so INFO messages are visible on stderr.
+
+    Without this, Python's lastResort handler only emits WARNING+, hiding
+    the diagnostic INFO/DEBUG logs added throughout host.py / remote.py.
+    Set ``EOU_DEBUG=1`` in the environment to raise the level to DEBUG.
+    """
+    level = logging.DEBUG if os.environ.get("EOU_DEBUG") else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
 # Default config paths (relative to CWD). Used when CONFIG_PATH argument is omitted.
 _DEFAULT_HOST_CONFIG = Path("configs/eou.host.yaml")
@@ -174,6 +193,7 @@ def _main(
     ),
 ) -> None:
     """EOU - Edge-triggered mouse ownership transfer (SPEC-MOUSE-001)."""
+    _init_logging()
 
 
 @app.command()
@@ -251,6 +271,52 @@ def remote(
 # ---------------------------------------------------------------------------
 
 
+async def _connect_with_retry(
+    transport: object, endpoint: str,
+    *, initial_delay: float = 1.0, max_delay: float = 30.0,
+) -> None:
+    """Dial *endpoint* with unbounded exponential-backoff retry.
+
+    Retries only on OSError from the TCP connect itself (peer unreachable,
+    refused, listener not up yet, etc.). The first failure emits the full
+    diagnostic from :func:`_format_network_error`; subsequent failures are
+    logged as single-line messages to keep the console readable during long
+    waits. Ctrl+C aborts the retry loop cleanly via KeyboardInterrupt,
+    which the CLI entry point catches.
+    """
+    attempt = 0
+    delay = initial_delay
+    while True:
+        attempt += 1
+        try:
+            typer.echo(
+                f"[HOST] Connecting to {endpoint} (attempt {attempt}) ..."
+            )
+            await transport.connect(endpoint)  # type: ignore[attr-defined]
+            typer.echo(f"[HOST] Connected to {endpoint}.")
+            return
+        except OSError as exc:
+            if attempt == 1:
+                # Full diagnostic on the first failure so the user sees the
+                # root cause + actionable checks without having to re-run.
+                typer.echo(
+                    _format_network_error(exc, endpoint, "HOST"), err=True
+                )
+            else:
+                code = getattr(exc, "winerror", None) or exc.errno
+                typer.echo(
+                    f"[HOST] Attempt {attempt} failed "
+                    f"(error {code}: {exc.strerror or exc})",
+                    err=True,
+                )
+            typer.echo(
+                f"[HOST] Retrying in {delay:.0f}s (Ctrl+C to stop) ...",
+                err=True,
+            )
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, max_delay)
+
+
 async def _run_host(cfg: EouConfig) -> None:
     """Wire and run the Host orchestrator."""
     # Lazy imports to keep cli.py decoupled from concrete implementations.
@@ -261,9 +327,7 @@ async def _run_host(cfg: EouConfig) -> None:
     from eou.ownership.takeback_detector import TakebackConfig
 
     transport = _make_transport(cfg)
-    typer.echo(f"[HOST] Connecting to {cfg.endpoint} ...")
-    await transport.connect(cfg.endpoint)
-    typer.echo(f"[HOST] Connected to {cfg.endpoint}.")
+    await _connect_with_retry(transport, cfg.endpoint)
 
     backend = _make_backend()
     visibility = (
@@ -289,6 +353,12 @@ async def _run_host(cfg: EouConfig) -> None:
         edge_config=edge_cfg,
         takeback_config=takeback_cfg,
     )
+    _logger.info(
+        "Host wiring: endpoint=%s screen_bounds=%s edge=%s threshold_px=%d "
+        "dwell_ticks=%d hide_cursor=%s",
+        cfg.endpoint, edge_cfg.screen_bounds, edge_cfg.edge,
+        edge_cfg.threshold_px, edge_cfg.dwell_ticks, cfg.hide_cursor,
+    )
     typer.echo(
         f"[HOST] Ready. edge={edge_cfg.edge} threshold={edge_cfg.threshold_px}px "
         f"dwell={edge_cfg.dwell_ticks}ticks. Press Ctrl+C to stop."
@@ -297,17 +367,16 @@ async def _run_host(cfg: EouConfig) -> None:
 
 
 async def _run_remote(cfg: EouConfig) -> None:
-    """Wire and run the Remote orchestrator."""
+    """Wire and run the Remote orchestrator.
+
+    Runs an unbounded session loop: after each HOST disconnects, we close
+    the transport and immediately re-listen for the next HOST connection.
+    Ctrl+C (KeyboardInterrupt) aborts the loop cleanly.
+    """
     from eou.input.visibility import NullCursorVisibility
     from eou.ownership.edge_detector import EdgeConfig
     from eou.ownership.takeback_detector import TakebackConfig
     from eou.remote import Remote
-
-    transport = _make_transport(cfg)
-    # REMOTE accepts the HOST's dial rather than dialing itself.
-    typer.echo(f"Remote listening on {cfg.endpoint} (waiting for host)...")
-    await transport.listen(cfg.endpoint)  # type: ignore[attr-defined]
-    typer.echo("Host connected.")
 
     backend = _make_backend()
     visibility = NullCursorVisibility()  # Remote never manipulates cursor
@@ -324,18 +393,61 @@ async def _run_remote(cfg: EouConfig) -> None:
         time_window_ms=cfg.takeback.time_window_ms,
     )
 
-    r = Remote(
-        transport=transport,
-        backend=backend,
-        visibility=visibility,
-        edge_config=edge_cfg,
-        takeback_config=takeback_cfg,
+    _logger.info(
+        "Remote wiring: endpoint=%s screen_bounds=%s edge=%s threshold_px=%d "
+        "dwell_ticks=%d",
+        cfg.endpoint, edge_cfg.screen_bounds, edge_cfg.edge,
+        edge_cfg.threshold_px, edge_cfg.dwell_ticks,
     )
     typer.echo(
         f"[REMOTE] Ready. edge={edge_cfg.edge} threshold={edge_cfg.threshold_px}px "
         f"dwell={edge_cfg.dwell_ticks}ticks. Press Ctrl+C to stop."
     )
-    await r.run()
+
+    session = 0
+    while True:
+        session += 1
+        transport = _make_transport(cfg)
+        typer.echo(
+            f"[REMOTE] Session {session}: listening on {cfg.endpoint} "
+            f"(waiting for host)..."
+        )
+        _logger.info(
+            "Remote: session %d — listening on %s, waiting for host",
+            session, cfg.endpoint,
+        )
+        try:
+            await transport.listen(cfg.endpoint)  # type: ignore[attr-defined]
+            typer.echo(f"[REMOTE] Session {session}: host connected.")
+            _logger.info("Remote: session %d — host connected", session)
+
+            r = Remote(
+                transport=transport,
+                backend=backend,
+                visibility=visibility,
+                edge_config=edge_cfg,
+                takeback_config=takeback_cfg,
+            )
+            await r.run()
+            _logger.info(
+                "Remote: session %d — run() returned (host disconnected or "
+                "session ended normally)", session,
+            )
+        finally:
+            try:
+                await transport.close()
+            except Exception:  # noqa: BLE001 — best-effort teardown
+                pass
+
+        typer.echo(
+            f"[REMOTE] Session {session} ended. "
+            f"Re-listening for next host connection..."
+        )
+        _logger.info(
+            "Remote: session %d closed; restarting listener shortly",
+            session,
+        )
+        await asyncio.sleep(0.5)
 
 
 def _make_transport(cfg: EouConfig) -> object:
@@ -351,13 +463,30 @@ def _make_transport(cfg: EouConfig) -> object:
 
 
 def _make_backend() -> object:
-    """Construct the OS mouse backend (pynput on Windows/Linux/macOS)."""
+    """Construct the OS mouse backend (pynput on Windows/Linux/macOS).
+
+    Falls back to a no-op backend only when pynput (or the backend module)
+    cannot be imported. The fallback is loud: a WARNING is emitted and a
+    stderr banner tells the user that no mouse events will ever arrive, so
+    the bug never hides silently the way it used to.
+    """
     try:
         from eou.input._pynput_backend import PynputMouseBackend  # type: ignore[import]
 
         return PynputMouseBackend()
-    except ImportError:
-        # Fallback: NullBackend when pynput is not available
+    except ImportError as exc:
+        _logger.warning(
+            "pynput backend unavailable (%s); falling back to NullBackend — "
+            "mouse capture is DISABLED and no edge detection will occur. "
+            "Install the 'pynput' package: pip install -e '.[dev]' (or '.[full]').",
+            exc,
+        )
+        typer.echo(
+            "[HOST] WARNING: pynput backend unavailable — running with "
+            "NullBackend. Mouse events will NOT be captured. "
+            f"(ImportError: {exc})",
+            err=True,
+        )
 
         class _NullBackend:
             def start_capture(self, on_event: object) -> None:
