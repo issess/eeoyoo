@@ -37,18 +37,29 @@ class PynputMouseBackend:
         # start_capture(). Readable from any thread; used by HOST for
         # diagnostic logging (no mutation from asyncio thread).
         self._event_count: int = 0
-        # Injection tagging: each call to move()/move_abs() is about to
-        # cause one or more callback re-entries on the listener thread
-        # (pynput observes its own synthetic Windows events). We track
-        # a bounded credit counter so the next N on_move callbacks are
-        # marked is_injected=True, which lets TakebackDetector filter
-        # them out. The deadline guards against stale credits when
-        # pynput coalesces or drops the synthetic callback.
+        # Injection tagging — two complementary modes guard against
+        # pynput observing the cursor moves we issue ourselves:
+        #
+        # 1. Position queue (preferred): when the target coordinate of
+        #    the synthetic move is known (relative move with known
+        #    current position, absolute move), we record that target
+        #    and tag the next pynput callback whose reported position
+        #    sits within tolerance of any pending target. This is robust
+        #    against high-frequency injects because each user event has
+        #    an unpredictable position that will not match any pending
+        #    target — so user motion is never falsely tagged.
+        # 2. Counter (fallback): for sites that cannot predict the
+        #    target (e.g., SetCursorPos to coordinates Windows clamps),
+        #    a one-shot credit tags the next callback regardless of
+        #    position. Race-prone if combined with continuous injects,
+        #    so reserved for one-shot visibility hide/show.
         self._injection_credits: int = 0
         self._injection_deadline: float = 0.0
+        self._pending_targets: list[tuple[int, int, float]] = []
         self._injection_lock = threading.Lock()
         # Tagging diagnostics (read from any thread under the lock).
-        self._injection_tagged: int = 0
+        self._injection_tagged_position: int = 0
+        self._injection_tagged_counter: int = 0
         self._injection_missed: int = 0
 
     def start_capture(self, on_event: Callable[[MouseEvent], None]) -> None:
@@ -69,20 +80,46 @@ class PynputMouseBackend:
             # or MouseInjector.inject_move on REMOTE). When it is, the
             # downstream takeback/outbound logic must treat it as a
             # software-injected event rather than physical user input.
+            #
+            # Position queue is checked first so high-frequency injects
+            # (REMOTE receiving HOST's MouseMove stream) cannot poison
+            # the counter and falsely tag a real user takeback motion.
             now = time.monotonic()
             is_injected = False
             with self._injection_lock:
-                if self._injection_credits > 0 and now < self._injection_deadline:
-                    self._injection_credits -= 1
-                    self._injection_tagged += 1
-                    is_injected = True
-                elif self._injection_credits > 0:
-                    # Deadline passed without a callback to consume the
-                    # credit — pynput coalesced or dropped the event.
-                    # Release stale credits so subsequent physical events
-                    # are not mis-tagged.
-                    self._injection_missed += self._injection_credits
-                    self._injection_credits = 0
+                # Prune expired position targets first so they do not
+                # match a coincident user event arriving much later.
+                still_valid: list[tuple[int, int, float]] = []
+                for px, py, deadline in self._pending_targets:
+                    if deadline >= now:
+                        still_valid.append((px, py, deadline))
+                    else:
+                        self._injection_missed += 1
+                self._pending_targets = still_valid
+
+                # Position match (preferred).
+                for i, (px, py, _deadline) in enumerate(self._pending_targets):
+                    if (
+                        abs(px - ix) <= self._POSITION_TOLERANCE_PX
+                        and abs(py - iy) <= self._POSITION_TOLERANCE_PX
+                    ):
+                        del self._pending_targets[i]
+                        self._injection_tagged_position += 1
+                        is_injected = True
+                        break
+
+                # Counter fallback (visibility-style untargeted credit).
+                if not is_injected:
+                    if (
+                        self._injection_credits > 0
+                        and now < self._injection_deadline
+                    ):
+                        self._injection_credits -= 1
+                        self._injection_tagged_counter += 1
+                        is_injected = True
+                    elif self._injection_credits > 0:
+                        self._injection_missed += self._injection_credits
+                        self._injection_credits = 0
 
             ev = MouseEvent(
                 dx=dx, dy=dy,
@@ -116,17 +153,20 @@ class PynputMouseBackend:
     # Window in which a pynput callback following a synthetic move is
     # considered an "echo" of that move rather than physical user input.
     _INJECTION_WINDOW_S: float = 0.1
+    # Pixel tolerance for position-based injection matching. Accounts for
+    # rounding when pynput rounds to integers and Windows clamps cursor
+    # positions to monitor bounds.
+    _POSITION_TOLERANCE_PX: int = 3
 
     def register_synthetic_move(self, count: int = 1) -> None:
         """Credit the next ``count`` pynput callbacks as synthetic echoes.
 
-        Callers (MouseInjector on REMOTE, WindowsCursorVisibility on HOST)
-        invoke this immediately before an API that moves the cursor via
-        Windows (SetCursorPos, pynput Controller.move/position=). Each
-        credit is consumed by the first pynput on_move callback that
-        arrives within ``_INJECTION_WINDOW_S``, which then surfaces as
-        ``MouseEvent.is_injected=True`` so TakebackDetector and similar
-        consumers can filter out the self-inflicted event.
+        COUNTER mode: tags the next callback regardless of position. Use
+        only when the post-move target coordinate cannot be predicted
+        (e.g., SetCursorPos to a virtual-screen coordinate that Windows
+        clamps to the visible monitor). Race-prone if combined with
+        high-frequency injects — prefer ``register_synthetic_move_to``
+        whenever the target is known.
         """
         if count <= 0:
             return
@@ -138,14 +178,36 @@ class PynputMouseBackend:
             if deadline > self._injection_deadline:
                 self._injection_deadline = deadline
 
+    def register_synthetic_move_to(self, x: int, y: int) -> None:
+        """POSITION mode: tag the next callback whose pos matches (x, y).
+
+        Robust against high-frequency injects (REMOTE receiving HOST's
+        MouseMove stream) because user physical events have unpredictable
+        positions that will not match any pending target.
+        """
+        deadline = time.monotonic() + self._INJECTION_WINDOW_S
+        with self._injection_lock:
+            self._pending_targets.append((int(x), int(y), deadline))
+
     def move(self, dx: int, dy: int) -> None:
-        """Inject a relative mouse movement (tags the echo as injected)."""
-        self.register_synthetic_move()
+        """Inject a relative mouse movement (tags the echo as injected).
+
+        Reads the current cursor position to compute the absolute target
+        coordinate so that position-based tagging can match the echo
+        precisely. Falls back to counter mode if the read fails.
+        """
+        try:
+            cur_x, cur_y = self._controller.position
+            target_x = int(cur_x) + int(dx)
+            target_y = int(cur_y) + int(dy)
+            self.register_synthetic_move_to(target_x, target_y)
+        except Exception:  # noqa: BLE001 — defensive
+            self.register_synthetic_move()
         self._controller.move(dx, dy)
 
     def move_abs(self, x: int, y: int) -> None:
         """Move the cursor to an absolute screen coordinate (tags echo)."""
-        self.register_synthetic_move()
+        self.register_synthetic_move_to(int(x), int(y))
         self._controller.position = (x, y)
 
     def get_position(self) -> tuple[int, int]:
@@ -170,15 +232,23 @@ class PynputMouseBackend:
         """Return counters for the injection-tagging bookkeeping.
 
         Keys:
-            credits_open:  Credits queued but not yet consumed (expected
-                           synthetic echoes still in flight).
-            tagged:        Events successfully marked is_injected=True.
-            missed:        Credits retired by deadline without a matching
-                           callback (indicates pynput coalescing).
+            targets_open:    Position-mode credits queued but not yet
+                             consumed (expected synthetic echoes still
+                             in flight, position-matched).
+            credits_open:    Counter-mode credits queued but not yet
+                             consumed (position-agnostic, fallback path).
+            tagged_position: Echoes successfully marked is_injected=True
+                             via position match (preferred path).
+            tagged_counter:  Echoes marked via counter fallback.
+            missed:          Credits retired by deadline without a
+                             matching callback (pynput coalescing or a
+                             position mismatch).
         """
         with self._injection_lock:
             return {
+                "targets_open": len(self._pending_targets),
                 "credits_open": self._injection_credits,
-                "tagged": self._injection_tagged,
+                "tagged_position": self._injection_tagged_position,
+                "tagged_counter": self._injection_tagged_counter,
                 "missed": self._injection_missed,
             }

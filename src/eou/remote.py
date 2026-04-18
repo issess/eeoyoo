@@ -193,6 +193,16 @@ class Remote:
         assert self._fsm is not None
         assert self._takeback_detector is not None
 
+        # Per-CONTROLLED-session counters reset on entry. Surfaced via the
+        # 2 s heartbeat below so an operator can see whether physical
+        # events are reaching the detector and whether they are being
+        # filtered as injected.
+        observed_total = 0
+        observed_physical = 0
+        observed_injected = 0
+        last_heartbeat = 0.0
+        controlled_session_seen = False
+
         while True:
             try:
                 event: object = await self._bridge.receive()
@@ -204,7 +214,49 @@ class Remote:
 
             state = self._fsm.state
             if state is not OwnershipState.CONTROLLED:
+                # Reset counters when leaving CONTROLLED so the next
+                # session starts fresh.
+                if controlled_session_seen:
+                    _logger.info(
+                        "Remote: leaving CONTROLLED (takeback monitor) — "
+                        "observed=%d physical=%d injected=%d "
+                        "injection_stats=%s",
+                        observed_total, observed_physical, observed_injected,
+                        self._injection_stats_str(),
+                    )
+                    observed_total = 0
+                    observed_physical = 0
+                    observed_injected = 0
+                    controlled_session_seen = False
                 continue
+
+            if not controlled_session_seen:
+                controlled_session_seen = True
+                last_heartbeat = time.monotonic()
+                _logger.info(
+                    "Remote: entering CONTROLLED takeback monitor — "
+                    "first event abs=(%d, %d) dx=%d dy=%d injected=%s",
+                    event.abs_x, event.abs_y, event.dx, event.dy,
+                    event.is_injected,
+                )
+
+            observed_total += 1
+            if event.is_injected:
+                observed_injected += 1
+            else:
+                observed_physical += 1
+
+            now = time.monotonic()
+            if now - last_heartbeat >= 2.0:
+                _logger.info(
+                    "Remote: takeback monitor stats — observed=%d "
+                    "physical=%d injected=%d last_event=(%d,%d) "
+                    "dx=%d dy=%d injected_flag=%s injection_stats=%s",
+                    observed_total, observed_physical, observed_injected,
+                    event.abs_x, event.abs_y, event.dx, event.dy,
+                    event.is_injected, self._injection_stats_str(),
+                )
+                last_heartbeat = now
 
             triggered = self._takeback_detector.observe(
                 dx=event.dx,
@@ -212,7 +264,11 @@ class Remote:
                 is_injected=event.is_injected,
             )
             if triggered:
-                _logger.info("Remote: takeback triggered, sending SESSION_END")
+                _logger.info(
+                    "Remote: takeback triggered after observed=%d "
+                    "physical=%d injected=%d; sending SESSION_END",
+                    observed_total, observed_physical, observed_injected,
+                )
                 self._fsm.on_local_input_detected()
                 try:
                     await self._transport.send(
@@ -338,3 +394,20 @@ class Remote:
             "Remote: FSM state change %s -> %s",
             old_state.name, new_state.name,
         )
+
+    def _injection_stats_str(self) -> str:
+        """Compact one-line backend injection-tagging counters.
+
+        Returns "n/a" if the backend does not expose injection_stats
+        (e.g., test fakes) or "error" if the call raises.
+        """
+        getter = getattr(self._backend, "injection_stats", None)
+        if getter is None:
+            return "n/a"
+        try:
+            stats = getter()
+        except Exception:  # noqa: BLE001 — diagnostic only
+            return "error"
+        if isinstance(stats, dict):
+            return " ".join(f"{k}={v}" for k, v in stats.items())
+        return str(stats)
