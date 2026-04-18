@@ -66,21 +66,62 @@ class WindowsAPI(Protocol):
 
 
 class _CtypesWindowsAPI:
-    """Production WindowsAPI implementation backed by ctypes.windll.user32.
+    """Production WindowsAPI implementation backed by a dedicated user32 handle.
 
-    Imported lazily so that this module is importable on Linux (where ctypes
-    exists but windll does not).  The class body is only evaluated when
-    instantiated.
+    Uses ``ctypes.WinDLL("user32", ...)`` rather than the shared
+    ``ctypes.windll.user32`` cache. pynput also installs a ``WH_MOUSE_LL``
+    hook through ``ctypes.windll.user32`` and, as a side effect, sets its
+    own HOOKPROC ``WINFUNCTYPE`` on ``SetWindowsHookExW.argtypes[1]``.
+    If we shared that handle, our ``c_hook`` (a different ``WINFUNCTYPE``
+    instance) would fail pynput's argtype check with
+    ``TypeError: expected WinFunctionType instance instead of
+    WinFunctionType``. A private handle keeps our argtypes isolated and
+    lets both libraries coexist.
     """
 
     def __init__(self) -> None:
-        # Lazy import inside __init__ to avoid AttributeError on Linux
+        # Lazy imports inside __init__ so the module remains importable on
+        # non-Windows platforms.
+        from ctypes import wintypes  # type: ignore[attr-defined]
 
-        self._user32 = ctypes.windll.user32  # type: ignore[attr-defined]
-        # Store reference to ctypes for HOOKPROC
+        # Private user32 handle — its argtypes do not leak to other ctypes
+        # consumers (e.g. pynput).
+        self._user32 = ctypes.WinDLL("user32", use_last_error=True)  # type: ignore[attr-defined]
+
+        # HOOKPROC: LRESULT CALLBACK(int nCode, WPARAM wParam, LPARAM lParam)
+        # Using wintypes matches the 64-bit Windows ABI (WPARAM/LPARAM are
+        # pointer-sized; LRESULT is pointer-sized).
         self._HOOKPROC = ctypes.WINFUNCTYPE(  # type: ignore[attr-defined]
-            ctypes.c_int, ctypes.c_int, ctypes.c_uint, ctypes.c_ulong
+            wintypes.LPARAM,   # LRESULT
+            ctypes.c_int,      # nCode
+            wintypes.WPARAM,   # wParam
+            wintypes.LPARAM,   # lParam
         )
+
+        # Pin argtypes/restype explicitly so no foreign module can rewrite
+        # them on us mid-run.
+        self._user32.SetWindowsHookExW.argtypes = [
+            ctypes.c_int,         # idHook
+            self._HOOKPROC,       # lpfn
+            wintypes.HINSTANCE,   # hmod
+            wintypes.DWORD,       # dwThreadId
+        ]
+        self._user32.SetWindowsHookExW.restype = wintypes.HHOOK
+
+        self._user32.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
+        self._user32.UnhookWindowsHookEx.restype = wintypes.BOOL
+
+        self._user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+        self._user32.SetCursorPos.restype = wintypes.BOOL
+
+        self._user32.GetSystemMetrics.argtypes = [ctypes.c_int]
+        self._user32.GetSystemMetrics.restype = ctypes.c_int
+
+        # The WINFUNCTYPE wrapper around the Python callback must stay
+        # alive for as long as Windows may call the hook. Keeping it on
+        # self prevents premature garbage collection that would leave a
+        # dangling function pointer inside the kernel hook chain.
+        self._c_hook: object | None = None
 
     def set_cursor_pos(self, x: int, y: int) -> bool:
         return bool(self._user32.SetCursorPos(x, y))
@@ -90,11 +131,15 @@ class _CtypesWindowsAPI:
 
     def set_windows_hook_ex(self, hook_proc: Callable[..., int]) -> int:
         c_hook = self._HOOKPROC(hook_proc)
+        self._c_hook = c_hook  # retain to prevent GC of the trampoline
         handle = self._user32.SetWindowsHookExW(WH_MOUSE_LL, c_hook, None, 0)
         return int(handle) if handle else 0
 
     def unhook_windows_hook_ex(self, handle: int) -> bool:
-        return bool(self._user32.UnhookWindowsHookEx(handle))
+        ok = bool(self._user32.UnhookWindowsHookEx(handle))
+        if ok:
+            self._c_hook = None
+        return ok
 
 
 class WindowsCursorVisibility:
