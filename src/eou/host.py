@@ -469,18 +469,54 @@ class Host:
         assert self._fsm is not None
 
         if isinstance(msg, OwnershipGrant):
+            current = self._fsm.state.name
             try:
                 self._fsm.on_ownership_granted()
+                _logger.info(
+                    "Host: OwnershipGrant accepted in prior state %s — "
+                    "now CONTROLLING",
+                    current,
+                )
             except Exception as exc:
-                _logger.warning("Host: unexpected OwnershipGrant in state %s: %s",
-                                self._fsm.state, exc)
+                _logger.warning(
+                    "Host: unexpected OwnershipGrant in state %s: %s",
+                    self._fsm.state, exc,
+                )
                 await self._transport.send(
                     encode(SessionEnd(reason="shutdown", ts=time.monotonic()))
                 )
 
         elif isinstance(msg, SessionEnd):
-            if self._fsm.state is not OwnershipState.IDLE:
-                self._fsm.on_session_end(reason=msg.reason)
+            current = self._fsm.state.name
+            reason = msg.reason
+            if self._fsm.state is OwnershipState.IDLE:
+                _logger.info(
+                    "Host: SessionEnd(reason=%s) received while already "
+                    "IDLE — ignored (idempotent)", reason,
+                )
+                return
+
+            # Distinct logs per protocol-defined reason so an operator
+            # can tell ownership return paths apart at a glance.
+            if reason == "edge_return":
+                _logger.info(
+                    "Host: SessionEnd(reason=edge_return) received from "
+                    "REMOTE — REMOTE user pushed cursor to its return-edge; "
+                    "releasing CONTROLLING and restoring HOST cursor"
+                )
+            elif reason == "takeback":
+                _logger.info(
+                    "Host: SessionEnd(reason=takeback) received from "
+                    "REMOTE — REMOTE user moved physical mouse beyond "
+                    "takeback threshold; releasing CONTROLLING"
+                )
+            else:
+                _logger.info(
+                    "Host: SessionEnd(reason=%s) received from REMOTE in "
+                    "state %s — releasing CONTROLLING",
+                    reason, current,
+                )
+            self._fsm.on_session_end(reason=reason)
 
     # ------------------------------------------------------------------
     # Internal: FSM state change callback

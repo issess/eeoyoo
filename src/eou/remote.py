@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 import time
 
 from eou.bridge import MouseEventBridge
@@ -29,7 +30,21 @@ from eou.input.backend import MouseBackend, MouseEvent
 from eou.input.capture import MouseCapture
 from eou.input.inject import MouseInjector
 from eou.input.visibility import CursorVisibility
-from eou.ownership.edge_detector import EdgeConfig
+
+# Display-wake helpers are Windows-only. Imported lazily so the module
+# remains importable on non-Windows platforms; functions degrade to
+# no-ops there.
+if sys.platform == "win32":
+    from eou.input._display_wake_windows import (  # type: ignore[import]
+        allow_display_sleep,
+        prevent_display_sleep,
+        wake_display_now,
+    )
+else:  # pragma: no cover — non-Windows fallback
+    def prevent_display_sleep() -> bool: return False
+    def allow_display_sleep() -> bool: return False
+    def wake_display_now() -> bool: return False
+from eou.ownership.edge_detector import EdgeConfig, EdgeDetector
 from eou.ownership.state import OwnershipFSM, OwnershipState
 from eou.ownership.takeback_detector import TakebackConfig, TakebackDetector
 from eou.protocol.codec import decode, encode
@@ -105,6 +120,15 @@ class Remote:
         self._fsm = OwnershipFSM()
         self._bridge = MouseEventBridge(loop=loop, maxsize=256)
         self._takeback_detector = TakebackDetector(config=self._takeback_config)
+        # Return-edge detector: while CONTROLLED, if the user pushes the
+        # physical cursor against the configured return edge (typically
+        # the LEFT edge of the REMOTE screen, mirroring HOST's RIGHT
+        # edge), trigger a SESSION_END(reason='edge_return'). This
+        # complements the motion-threshold takeback path with the
+        # standard KVM "go back to the home machine via the screen edge"
+        # gesture. Only physical events (is_injected=False) feed the
+        # detector — HOST inject moves do not count.
+        self._edge_detector = EdgeDetector(config=self._edge_config)
         self._injector = MouseInjector(backend=self._backend)
 
         self._capture = MouseCapture(
@@ -116,6 +140,11 @@ class Remote:
         # cursor but state changes are useful for operators tracking
         # ownership transfer during a session).
         self._fsm.subscribe(self._on_state_change)
+
+        # Tell Windows to keep the display awake for the duration of
+        # this session. No-op on non-Windows. Released in the finally
+        # block below.
+        prevent_display_sleep()
 
         try:
             # Step 1: Handshake — await HOST hello
@@ -161,6 +190,9 @@ class Remote:
                 self._capture.stop()
             if self._fsm and self._fsm.state is not OwnershipState.IDLE:
                 self._fsm.on_session_end(reason="shutdown")
+            # Release the display-sleep override so the system can
+            # power down the screen normally after the session ends.
+            allow_display_sleep()
             await self._transport.close()
 
     # ------------------------------------------------------------------
@@ -204,6 +236,14 @@ class Remote:
         observed_injected = 0
         last_heartbeat = 0.0
         controlled_session_seen = False
+        # Edge proximity bookkeeping (REMOTE return-edge gesture).
+        # Tracks whether the cursor is currently inside the configured
+        # return-edge band, and whether CROSS_OUT has already fired in
+        # this approach so we don't spam SESSION_END frames while the
+        # user holds the cursor against the edge waiting for HOST to
+        # acknowledge. Reset on proximity exit.
+        in_edge_proximity = False
+        edge_crossed_in_window = False
 
         while True:
             try:
@@ -259,6 +299,58 @@ class Remote:
                     event.is_injected, self._injection_stats_str(),
                 )
                 last_heartbeat = now
+
+            # Return-edge detection (physical events only). HOST-injected
+            # cursor moves must not look like a takeback gesture, so the
+            # is_injected flag gates this entire block.
+            if not event.is_injected:
+                near = self._edge_detector._within_threshold(
+                    event.abs_x, event.abs_y
+                )
+                if near and not in_edge_proximity:
+                    _logger.info(
+                        "Remote: cursor entered %s return-edge proximity at "
+                        "(%d, %d) (threshold=%dpx bounds=%s) — dwell counting "
+                        "started",
+                        self._edge_config.edge, event.abs_x, event.abs_y,
+                        self._edge_config.threshold_px,
+                        self._edge_config.screen_bounds,
+                    )
+                    in_edge_proximity = True
+                    edge_crossed_in_window = False
+                elif not near and in_edge_proximity:
+                    _logger.info(
+                        "Remote: cursor left return-edge proximity at "
+                        "(%d, %d) — dwell reset",
+                        event.abs_x, event.abs_y,
+                    )
+                    in_edge_proximity = False
+                    edge_crossed_in_window = False
+
+                if near and not edge_crossed_in_window:
+                    edge_event = self._edge_detector.observe(
+                        event.abs_x, event.abs_y
+                    )
+                    if edge_event is not None:
+                        edge_crossed_in_window = True
+                        _logger.info(
+                            "Remote: return-edge crossed (%s) at (%d, %d); "
+                            "sending SESSION_END(reason=edge_return)",
+                            edge_event.name, event.abs_x, event.abs_y,
+                        )
+                        self._fsm.on_local_input_detected()
+                        try:
+                            await self._transport.send(
+                                encode(SessionEnd(
+                                    reason="edge_return",
+                                    ts=time.monotonic(),
+                                ))
+                            )
+                        except ConnectionClosedError:
+                            pass
+                        # Skip motion-takeback for this same event so we
+                        # don't double-fire SESSION_END.
+                        continue
 
             triggered = self._takeback_detector.observe(
                 dx=event.dx,
@@ -407,11 +499,21 @@ class Remote:
         old_state: OwnershipState,
         new_state: OwnershipState,
     ) -> None:
-        """Log FSM transitions. Remote never manipulates cursor visibility."""
+        """Log FSM transitions and wake the display on CONTROLLED entry.
+
+        Remote never manipulates cursor visibility, but it does need to
+        wake the screen when HOST first takes control — otherwise the
+        operator cannot see the injected cursor on a blanked monitor.
+        """
         _logger.info(
             "Remote: FSM state change %s -> %s",
             old_state.name, new_state.name,
         )
+        if (
+            old_state is OwnershipState.IDLE
+            and new_state is OwnershipState.CONTROLLED
+        ):
+            wake_display_now()
 
     def _injection_stats_str(self) -> str:
         """Compact one-line backend injection-tagging counters.
