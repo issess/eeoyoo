@@ -81,6 +81,34 @@ class TestEncodeDecodeRoundTrip:
         original = SessionEnd(reason="takeback", ts=2.0)
         assert decode(encode(original)) == original
 
+    def test_mouse_click_round_trip(self) -> None:
+        from eou.protocol.codec import decode, encode
+        from eou.protocol.messages import MouseClick
+
+        original = MouseClick(button="left", pressed=True, ts=1.0)
+        assert decode(encode(original)) == original
+
+    def test_mouse_click_release_round_trip(self) -> None:
+        from eou.protocol.codec import decode, encode
+        from eou.protocol.messages import MouseClick
+
+        original = MouseClick(button="right", pressed=False, ts=2.5)
+        assert decode(encode(original)) == original
+
+    def test_mouse_scroll_round_trip(self) -> None:
+        from eou.protocol.codec import decode, encode
+        from eou.protocol.messages import MouseScroll
+
+        original = MouseScroll(dx=0, dy=-3, ts=1.0)
+        assert decode(encode(original)) == original
+
+    def test_mouse_scroll_horizontal_round_trip(self) -> None:
+        from eou.protocol.codec import decode, encode
+        from eou.protocol.messages import MouseScroll
+
+        original = MouseScroll(dx=2, dy=0, ts=2.0)
+        assert decode(encode(original)) == original
+
     def test_heartbeat_round_trip(self) -> None:
         from eou.protocol.codec import decode, encode
         from eou.protocol.messages import Heartbeat

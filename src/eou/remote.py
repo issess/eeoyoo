@@ -35,7 +35,9 @@ from eou.ownership.takeback_detector import TakebackConfig, TakebackDetector
 from eou.protocol.codec import decode, encode
 from eou.protocol.messages import (
     Hello,
+    MouseClick,
     MouseMove,
+    MouseScroll,
     OwnershipGrant,
     OwnershipRequest,
     SessionEnd,
@@ -371,6 +373,22 @@ class Remote:
                     self._injector.inject_move(dx=msg.dx, dy=msg.dy)
                 except Exception as exc:
                     _logger.warning("Remote: inject_move error: %s", exc)
+
+        elif isinstance(msg, MouseClick):
+            if self._fsm.state is OwnershipState.CONTROLLED:
+                try:
+                    self._injector.inject_click(
+                        button=msg.button, pressed=msg.pressed
+                    )
+                except Exception as exc:
+                    _logger.warning("Remote: inject_click error: %s", exc)
+
+        elif isinstance(msg, MouseScroll):
+            if self._fsm.state is OwnershipState.CONTROLLED:
+                try:
+                    self._injector.inject_scroll(dx=msg.dx, dy=msg.dy)
+                except Exception as exc:
+                    _logger.warning("Remote: inject_scroll error: %s", exc)
 
         elif isinstance(msg, SessionEnd):
             if self._fsm.state is not OwnershipState.IDLE:

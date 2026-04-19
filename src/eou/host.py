@@ -34,7 +34,7 @@ import logging
 import time
 
 from eou.bridge import MouseEventBridge
-from eou.input.backend import MouseBackend, MouseEvent
+from eou.input.backend import MouseBackend, MouseClickEvent, MouseEvent, MouseScrollEvent
 from eou.input.capture import MouseCapture
 from eou.input.visibility import CursorVisibility
 from eou.ownership.edge_detector import EdgeConfig, EdgeDetector
@@ -43,7 +43,9 @@ from eou.ownership.takeback_detector import TakebackConfig
 from eou.protocol.codec import decode, encode
 from eou.protocol.messages import (
     Hello,
+    MouseClick,
     MouseMove,
+    MouseScroll,
     OwnershipGrant,
     OwnershipRequest,
     SessionEnd,
@@ -263,6 +265,34 @@ class Host:
                     exc_info=True,
                 )
                 break
+
+            # Forward click events while CONTROLLING
+            if isinstance(event, MouseClickEvent):
+                if self._fsm.state is OwnershipState.CONTROLLING:
+                    await self._transport.send(
+                        encode(
+                            MouseClick(
+                                button=event.button,
+                                pressed=event.pressed,
+                                ts=event.ts,
+                            )
+                        )
+                    )
+                continue
+
+            # Forward scroll events while CONTROLLING
+            if isinstance(event, MouseScrollEvent):
+                if self._fsm.state is OwnershipState.CONTROLLING:
+                    await self._transport.send(
+                        encode(
+                            MouseScroll(
+                                dx=event.dx,
+                                dy=event.dy,
+                                ts=event.ts,
+                            )
+                        )
+                    )
+                continue
 
             if not isinstance(event, MouseEvent):
                 continue

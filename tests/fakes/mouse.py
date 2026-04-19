@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from eou.input.backend import MouseEvent
+from eou.input.backend import MouseClickEvent, MouseEvent, MouseScrollEvent
 
 
 class FakeMouseBackend:
@@ -17,6 +17,7 @@ class FakeMouseBackend:
     Attributes:
         move_calls: List of (dx, dy) tuples passed to move().
         move_abs_calls: List of (x, y) tuples passed to move_abs().
+        click_calls: List of (button, pressed) tuples passed to click().
     """
 
     def __init__(self) -> None:
@@ -25,6 +26,8 @@ class FakeMouseBackend:
         self._position: tuple[int, int] = (0, 0)
         self.move_calls: list[tuple[int, int]] = []
         self.move_abs_calls: list[tuple[int, int]] = []
+        self.click_calls: list[tuple[str, bool]] = []
+        self.scroll_calls: list[tuple[int, int]] = []
 
     # ------------------------------------------------------------------
     # MouseBackend Protocol implementation
@@ -49,6 +52,14 @@ class FakeMouseBackend:
         self.move_abs_calls.append((x, y))
         self._position = (x, y)
 
+    def click(self, button: str, pressed: bool) -> None:
+        """Record click without touching the OS."""
+        self.click_calls.append((button, pressed))
+
+    def scroll(self, dx: int, dy: int) -> None:
+        """Record scroll without touching the OS."""
+        self.scroll_calls.append((dx, dy))
+
     def get_position(self) -> tuple[int, int]:
         """Return the last position set by move_abs, or (0, 0)."""
         return self._position
@@ -71,3 +82,19 @@ class FakeMouseBackend:
         """
         if self._callback is not None:
             self._callback(event)
+
+    def feed_click_event(self, event: MouseClickEvent) -> None:
+        """Deliver a click event directly to the registered callback.
+
+        If no callback is registered (before start_capture), this is a no-op.
+        """
+        if self._callback is not None:
+            self._callback(event)  # type: ignore[arg-type]
+
+    def feed_scroll_event(self, event: MouseScrollEvent) -> None:
+        """Deliver a scroll event directly to the registered callback.
+
+        If no callback is registered (before start_capture), this is a no-op.
+        """
+        if self._callback is not None:
+            self._callback(event)  # type: ignore[arg-type]

@@ -22,7 +22,17 @@ from collections.abc import Callable
 
 from pynput import mouse  # type: ignore[import-untyped]
 
-from eou.input.backend import MouseEvent
+from eou.input.backend import MouseClickEvent, MouseEvent, MouseScrollEvent
+
+# Map pynput Button enum values to wire-protocol button names.
+_BUTTON_MAP: dict[mouse.Button, str] = {
+    mouse.Button.left: "left",
+    mouse.Button.right: "right",
+    mouse.Button.middle: "middle",
+}
+
+# Reverse map for injection: wire name → pynput Button.
+_BUTTON_REVERSE: dict[str, mouse.Button] = {v: k for k, v in _BUTTON_MAP.items()}
 
 
 class PynputMouseBackend:
@@ -134,7 +144,45 @@ class PynputMouseBackend:
                 # Never let a user callback crash the listener thread.
                 pass
 
-        listener = mouse.Listener(on_move=_on_move)
+        def _on_click(x: float, y: float, button: mouse.Button, pressed: bool) -> None:
+            ix, iy = int(x), int(y)
+            now = time.monotonic()
+            # Map pynput Button enum to wire-protocol string.
+            button_name = _BUTTON_MAP.get(button)
+            if button_name is None:
+                return
+            ev = MouseClickEvent(
+                button=button_name,
+                pressed=pressed,
+                abs_x=ix,
+                abs_y=iy,
+                is_injected=False,
+                ts=now,
+            )
+            try:
+                on_event(ev)  # type: ignore[arg-type]
+            except Exception:
+                pass
+
+        def _on_scroll(x: float, y: float, sdx: int, sdy: int) -> None:
+            ix, iy = int(x), int(y)
+            now = time.monotonic()
+            ev = MouseScrollEvent(
+                dx=int(sdx),
+                dy=int(sdy),
+                abs_x=ix,
+                abs_y=iy,
+                is_injected=False,
+                ts=now,
+            )
+            try:
+                on_event(ev)  # type: ignore[arg-type]
+            except Exception:
+                pass
+
+        listener = mouse.Listener(
+            on_move=_on_move, on_click=_on_click, on_scroll=_on_scroll,
+        )
         listener.daemon = True
         listener.start()
         self._listener = listener
@@ -204,6 +252,20 @@ class PynputMouseBackend:
         except Exception:  # noqa: BLE001 — defensive
             self.register_synthetic_move()
         self._controller.move(dx, dy)
+
+    def click(self, button: str, pressed: bool) -> None:
+        """Inject a mouse button press or release via pynput."""
+        btn = _BUTTON_REVERSE.get(button)
+        if btn is None:
+            return
+        if pressed:
+            self._controller.press(btn)
+        else:
+            self._controller.release(btn)
+
+    def scroll(self, dx: int, dy: int) -> None:
+        """Inject a mouse scroll event via pynput."""
+        self._controller.scroll(dx, dy)
 
     def move_abs(self, x: int, y: int) -> None:
         """Move the cursor to an absolute screen coordinate (tags echo)."""

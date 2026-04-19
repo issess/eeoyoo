@@ -97,7 +97,7 @@ class TestWindowsCursorVisibilityHide:
         from eou.input._visibility_windows import WindowsCursorVisibility
 
         api = FakeWindowsAPI(hook_handle=42)
-        wv = WindowsCursorVisibility(api=api)
+        wv = WindowsCursorVisibility(api=api, install_hook=True)
         wv.hide(pre_hide_position=(50, 60))
 
         assert len(api.set_hook_calls) == 1
@@ -129,7 +129,7 @@ class TestWindowsCursorVisibilityHookFailure:
         from eou.input._visibility_windows import WindowsCursorVisibility
 
         api = FakeWindowsAPI(hook_fail=True)
-        wv = WindowsCursorVisibility(api=api)
+        wv = WindowsCursorVisibility(api=api, install_hook=True)
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             wv.hide(pre_hide_position=(10, 20))
@@ -142,7 +142,7 @@ class TestWindowsCursorVisibilityHookFailure:
         from eou.input._visibility_windows import WindowsCursorVisibility
 
         api = FakeWindowsAPI(hook_fail=True)
-        wv = WindowsCursorVisibility(api=api)
+        wv = WindowsCursorVisibility(api=api, install_hook=True)
         import warnings
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
@@ -162,7 +162,7 @@ class TestWindowsCursorVisibilityShow:
         from eou.input._visibility_windows import WindowsCursorVisibility
 
         api = FakeWindowsAPI(hook_handle=99)
-        wv = WindowsCursorVisibility(api=api)
+        wv = WindowsCursorVisibility(api=api, install_hook=True)
         wv.hide(pre_hide_position=(10, 20))
         wv.show()
 
@@ -218,7 +218,7 @@ class TestWindowsCursorVisibilityIdempotency:
         from eou.input._visibility_windows import WindowsCursorVisibility
 
         api = FakeWindowsAPI(hook_handle=55)
-        wv = WindowsCursorVisibility(api=api)
+        wv = WindowsCursorVisibility(api=api, install_hook=True)
         wv.hide(pre_hide_position=(10, 20))
         wv.hide(pre_hide_position=(30, 40))
 

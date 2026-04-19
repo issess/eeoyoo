@@ -40,6 +40,48 @@ class MouseEvent:
     ts: float
 
 
+@dataclass
+class MouseClickEvent:
+    """A mouse button press or release event.
+
+    Attributes:
+        button: Which button was acted on ("left", "right", or "middle").
+        pressed: True for press, False for release.
+        abs_x: Absolute cursor x-coordinate at event time.
+        abs_y: Absolute cursor y-coordinate at event time.
+        is_injected: True when this event originated from MouseInjector.
+        ts: Monotonic timestamp (seconds) when the event was created.
+    """
+
+    button: str
+    pressed: bool
+    abs_x: int
+    abs_y: int
+    is_injected: bool
+    ts: float
+
+
+@dataclass
+class MouseScrollEvent:
+    """A mouse wheel/scroll event.
+
+    Attributes:
+        dx: Horizontal scroll amount (positive = right).
+        dy: Vertical scroll amount (positive = up/away from user).
+        abs_x: Absolute cursor x-coordinate at event time.
+        abs_y: Absolute cursor y-coordinate at event time.
+        is_injected: True when this event originated from MouseInjector.
+        ts: Monotonic timestamp (seconds) when the event was created.
+    """
+
+    dx: int
+    dy: int
+    abs_x: int
+    abs_y: int
+    is_injected: bool
+    ts: float
+
+
 @runtime_checkable
 class MouseBackend(Protocol):
     """Protocol for OS-level mouse capture and injection.
@@ -80,6 +122,24 @@ class MouseBackend(Protocol):
         Args:
             x: Absolute x-coordinate.
             y: Absolute y-coordinate.
+        """
+        ...
+
+    def click(self, button: str, pressed: bool) -> None:
+        """Inject a mouse button press or release.
+
+        Args:
+            button: One of "left", "right", "middle".
+            pressed: True to press, False to release.
+        """
+        ...
+
+    def scroll(self, dx: int, dy: int) -> None:
+        """Inject a mouse scroll event.
+
+        Args:
+            dx: Horizontal scroll amount (positive = right).
+            dy: Vertical scroll amount (positive = up/away from user).
         """
         ...
 

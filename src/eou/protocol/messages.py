@@ -76,6 +76,36 @@ class SessionEnd:
 
 
 @dataclasses.dataclass(frozen=True)
+class MouseClick:
+    """Mouse button click event.
+
+    Sent from HOST to REMOTE while CONTROLLING to replicate button presses
+    and releases on the remote machine.
+    """
+
+    TYPE: ClassVar[str] = "MOUSE_CLICK"
+
+    button: Literal["left", "right", "middle"]
+    pressed: bool
+    ts: float
+
+
+@dataclasses.dataclass(frozen=True)
+class MouseScroll:
+    """Mouse wheel/scroll event.
+
+    Sent from HOST to REMOTE while CONTROLLING to replicate scroll actions
+    on the remote machine.
+    """
+
+    TYPE: ClassVar[str] = "MOUSE_SCROLL"
+
+    dx: int
+    dy: int
+    ts: float
+
+
+@dataclasses.dataclass(frozen=True)
 class Heartbeat:
     """Keepalive ping.
 
@@ -91,6 +121,8 @@ class Heartbeat:
 AnyMessage = Union[
     Hello,
     MouseMove,
+    MouseClick,
+    MouseScroll,
     OwnershipRequest,
     OwnershipGrant,
     SessionEnd,

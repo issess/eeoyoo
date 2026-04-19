@@ -55,6 +55,29 @@ class MouseInjector:
             )
         self._backend.move(dx, dy)
 
+    def inject_click(self, button: str, pressed: bool) -> None:
+        """Inject a mouse button press or release.
+
+        Args:
+            button: One of "left", "right", "middle".
+            pressed: True to press, False to release.
+
+        Raises:
+            ValueError: If button is not a recognized name.
+        """
+        if button not in ("left", "right", "middle"):
+            raise ValueError(f"Unknown button {button!r}; expected left/right/middle")
+        self._backend.click(button, pressed)
+
+    def inject_scroll(self, dx: int, dy: int) -> None:
+        """Inject a mouse scroll event.
+
+        Args:
+            dx: Horizontal scroll amount (positive = right).
+            dy: Vertical scroll amount (positive = up/away from user).
+        """
+        self._backend.scroll(dx, dy)
+
     def inject_move_abs(self, x: int, y: int) -> None:
         """Inject an absolute cursor position.
 

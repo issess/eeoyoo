@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import time
 
-from eou.input.backend import MouseEvent
+from eou.input.backend import MouseClickEvent, MouseEvent, MouseScrollEvent
 from eou.ownership.edge_detector import EdgeConfig
 from eou.ownership.takeback_detector import TakebackConfig
 from tests.fakes.mouse import FakeMouseBackend
@@ -307,6 +307,466 @@ class TestHostSessionEnd:
         """SESSION_END(reason='takeback') → visibility.show() called (Scenario 3)."""
         vis, show_count = await self._run_until_session_end("takeback")
         assert show_count >= 1
+
+
+class TestHostClickForwarding:
+    """Click events forwarded while CONTROLLING."""
+
+    async def test_click_sent_while_controlling(self) -> None:
+        """While CONTROLLING, click events produce MOUSE_CLICK frames."""
+        from eou.host import Host
+        from eou.protocol.codec import decode, encode
+        from eou.protocol.messages import Hello, MouseClick, OwnershipGrant
+
+        host_t, remote_t = _make_fake_transport_pair()
+        visibility = FakeCursorVisibility()
+        backend = FakeMouseBackend()
+        backend._position = (1918, 540)
+
+        host = Host(
+            transport=host_t,
+            backend=backend,
+            visibility=visibility,
+            edge_config=_edge_right(),
+            takeback_config=_takeback_config(),
+        )
+
+        async def _drive() -> None:
+            await asyncio.wait_for(host.run(), timeout=2.0)
+
+        async def _scenario() -> None:
+            await asyncio.sleep(0.05)
+            await remote_t.send(encode(Hello(version="0.1.0", role="remote")))
+            await asyncio.sleep(0.05)
+
+            # Trigger edge dwell
+            for _ in range(3):
+                backend.feed_event(
+                    MouseEvent(
+                        dx=0, dy=0, abs_x=1918, abs_y=540,
+                        is_injected=False, ts=time.monotonic(),
+                    )
+                )
+                await asyncio.sleep(0.02)
+
+            await asyncio.sleep(0.05)
+            await remote_t.send(encode(OwnershipGrant(ts=time.monotonic())))
+            await asyncio.sleep(0.05)
+
+            # Feed click events while CONTROLLING
+            backend.feed_click_event(
+                MouseClickEvent(
+                    button="left", pressed=True,
+                    abs_x=1918, abs_y=540,
+                    is_injected=False, ts=time.monotonic(),
+                )
+            )
+            await asyncio.sleep(0.02)
+            backend.feed_click_event(
+                MouseClickEvent(
+                    button="left", pressed=False,
+                    abs_x=1918, abs_y=540,
+                    is_injected=False, ts=time.monotonic(),
+                )
+            )
+            await asyncio.sleep(0.1)
+            await host_t.close()
+
+        await asyncio.gather(_drive(), _scenario(), return_exceptions=True)
+
+        sent_messages = [decode(f) for f in host_t.sent_frames]
+        clicks = [m for m in sent_messages if isinstance(m, MouseClick)]
+        assert len(clicks) >= 2
+        assert clicks[0].button == "left"
+        assert clicks[0].pressed is True
+        assert clicks[1].pressed is False
+
+    async def test_click_not_sent_while_idle(self) -> None:
+        """Click events in IDLE state are NOT forwarded."""
+        from eou.host import Host
+        from eou.protocol.codec import decode, encode
+        from eou.protocol.messages import Hello, MouseClick
+
+        host_t, remote_t = _make_fake_transport_pair()
+        visibility = FakeCursorVisibility()
+        backend = FakeMouseBackend()
+        backend._position = (500, 500)
+
+        host = Host(
+            transport=host_t,
+            backend=backend,
+            visibility=visibility,
+            edge_config=_edge_right(),
+            takeback_config=_takeback_config(),
+        )
+
+        async def _drive() -> None:
+            await asyncio.wait_for(host.run(), timeout=1.0)
+
+        async def _scenario() -> None:
+            await asyncio.sleep(0.05)
+            await remote_t.send(encode(Hello(version="0.1.0", role="remote")))
+            await asyncio.sleep(0.05)
+
+            # Feed click event while IDLE
+            backend.feed_click_event(
+                MouseClickEvent(
+                    button="left", pressed=True,
+                    abs_x=500, abs_y=500,
+                    is_injected=False, ts=time.monotonic(),
+                )
+            )
+            await asyncio.sleep(0.1)
+            await host_t.close()
+
+        await asyncio.gather(_drive(), _scenario(), return_exceptions=True)
+
+        sent_messages = [decode(f) for f in host_t.sent_frames]
+        clicks = [m for m in sent_messages if isinstance(m, MouseClick)]
+        assert len(clicks) == 0
+
+
+class TestHostScrollForwarding:
+    """Scroll events forwarded while CONTROLLING."""
+
+    async def test_scroll_sent_while_controlling(self) -> None:
+        """While CONTROLLING, scroll events produce MOUSE_SCROLL frames."""
+        from eou.host import Host
+        from eou.protocol.codec import decode, encode
+        from eou.protocol.messages import Hello, MouseScroll, OwnershipGrant
+
+        host_t, remote_t = _make_fake_transport_pair()
+        visibility = FakeCursorVisibility()
+        backend = FakeMouseBackend()
+        backend._position = (1918, 540)
+
+        host = Host(
+            transport=host_t,
+            backend=backend,
+            visibility=visibility,
+            edge_config=_edge_right(),
+            takeback_config=_takeback_config(),
+        )
+
+        async def _drive() -> None:
+            await asyncio.wait_for(host.run(), timeout=2.0)
+
+        async def _scenario() -> None:
+            await asyncio.sleep(0.05)
+            await remote_t.send(encode(Hello(version="0.1.0", role="remote")))
+            await asyncio.sleep(0.05)
+
+            for _ in range(3):
+                backend.feed_event(
+                    MouseEvent(
+                        dx=0, dy=0, abs_x=1918, abs_y=540,
+                        is_injected=False, ts=time.monotonic(),
+                    )
+                )
+                await asyncio.sleep(0.02)
+
+            await asyncio.sleep(0.05)
+            await remote_t.send(encode(OwnershipGrant(ts=time.monotonic())))
+            await asyncio.sleep(0.05)
+
+            # Feed scroll events while CONTROLLING
+            backend.feed_scroll_event(
+                MouseScrollEvent(
+                    dx=0, dy=-3,
+                    abs_x=1918, abs_y=540,
+                    is_injected=False, ts=time.monotonic(),
+                )
+            )
+            await asyncio.sleep(0.02)
+            backend.feed_scroll_event(
+                MouseScrollEvent(
+                    dx=2, dy=0,
+                    abs_x=1918, abs_y=540,
+                    is_injected=False, ts=time.monotonic(),
+                )
+            )
+            await asyncio.sleep(0.1)
+            await host_t.close()
+
+        await asyncio.gather(_drive(), _scenario(), return_exceptions=True)
+
+        sent_messages = [decode(f) for f in host_t.sent_frames]
+        scrolls = [m for m in sent_messages if isinstance(m, MouseScroll)]
+        assert len(scrolls) >= 2
+        assert scrolls[0].dy == -3
+        assert scrolls[1].dx == 2
+
+    async def test_scroll_not_sent_while_idle(self) -> None:
+        """Scroll events in IDLE state are NOT forwarded."""
+        from eou.host import Host
+        from eou.protocol.codec import decode, encode
+        from eou.protocol.messages import Hello, MouseScroll
+
+        host_t, remote_t = _make_fake_transport_pair()
+        visibility = FakeCursorVisibility()
+        backend = FakeMouseBackend()
+        backend._position = (500, 500)
+
+        host = Host(
+            transport=host_t,
+            backend=backend,
+            visibility=visibility,
+            edge_config=_edge_right(),
+            takeback_config=_takeback_config(),
+        )
+
+        async def _drive() -> None:
+            await asyncio.wait_for(host.run(), timeout=1.0)
+
+        async def _scenario() -> None:
+            await asyncio.sleep(0.05)
+            await remote_t.send(encode(Hello(version="0.1.0", role="remote")))
+            await asyncio.sleep(0.05)
+
+            backend.feed_scroll_event(
+                MouseScrollEvent(
+                    dx=0, dy=-1,
+                    abs_x=500, abs_y=500,
+                    is_injected=False, ts=time.monotonic(),
+                )
+            )
+            await asyncio.sleep(0.1)
+            await host_t.close()
+
+        await asyncio.gather(_drive(), _scenario(), return_exceptions=True)
+
+        sent_messages = [decode(f) for f in host_t.sent_frames]
+        scrolls = [m for m in sent_messages if isinstance(m, MouseScroll)]
+        assert len(scrolls) == 0
+
+
+class TestHostRightMiddleClickForwarding:
+    """Right-click and middle-click events forwarded while CONTROLLING."""
+
+    async def test_right_click_sent_while_controlling(self) -> None:
+        """While CONTROLLING, right-click events produce MOUSE_CLICK frames."""
+        from eou.host import Host
+        from eou.protocol.codec import decode, encode
+        from eou.protocol.messages import Hello, MouseClick, OwnershipGrant
+
+        host_t, remote_t = _make_fake_transport_pair()
+        visibility = FakeCursorVisibility()
+        backend = FakeMouseBackend()
+        backend._position = (1918, 540)
+
+        host = Host(
+            transport=host_t,
+            backend=backend,
+            visibility=visibility,
+            edge_config=_edge_right(),
+            takeback_config=_takeback_config(),
+        )
+
+        async def _drive() -> None:
+            await asyncio.wait_for(host.run(), timeout=2.0)
+
+        async def _scenario() -> None:
+            await asyncio.sleep(0.05)
+            await remote_t.send(encode(Hello(version="0.1.0", role="remote")))
+            await asyncio.sleep(0.05)
+
+            for _ in range(3):
+                backend.feed_event(
+                    MouseEvent(
+                        dx=0, dy=0, abs_x=1918, abs_y=540,
+                        is_injected=False, ts=time.monotonic(),
+                    )
+                )
+                await asyncio.sleep(0.02)
+
+            await asyncio.sleep(0.05)
+            await remote_t.send(encode(OwnershipGrant(ts=time.monotonic())))
+            await asyncio.sleep(0.05)
+
+            backend.feed_click_event(
+                MouseClickEvent(
+                    button="right", pressed=True,
+                    abs_x=1918, abs_y=540,
+                    is_injected=False, ts=time.monotonic(),
+                )
+            )
+            await asyncio.sleep(0.02)
+            backend.feed_click_event(
+                MouseClickEvent(
+                    button="right", pressed=False,
+                    abs_x=1918, abs_y=540,
+                    is_injected=False, ts=time.monotonic(),
+                )
+            )
+            await asyncio.sleep(0.1)
+            await host_t.close()
+
+        await asyncio.gather(_drive(), _scenario(), return_exceptions=True)
+
+        sent_messages = [decode(f) for f in host_t.sent_frames]
+        clicks = [m for m in sent_messages if isinstance(m, MouseClick)]
+        right_clicks = [c for c in clicks if c.button == "right"]
+        assert len(right_clicks) >= 2
+        assert right_clicks[0].pressed is True
+        assert right_clicks[1].pressed is False
+
+    async def test_middle_click_sent_while_controlling(self) -> None:
+        """While CONTROLLING, middle-click events produce MOUSE_CLICK frames."""
+        from eou.host import Host
+        from eou.protocol.codec import decode, encode
+        from eou.protocol.messages import Hello, MouseClick, OwnershipGrant
+
+        host_t, remote_t = _make_fake_transport_pair()
+        visibility = FakeCursorVisibility()
+        backend = FakeMouseBackend()
+        backend._position = (1918, 540)
+
+        host = Host(
+            transport=host_t,
+            backend=backend,
+            visibility=visibility,
+            edge_config=_edge_right(),
+            takeback_config=_takeback_config(),
+        )
+
+        async def _drive() -> None:
+            await asyncio.wait_for(host.run(), timeout=2.0)
+
+        async def _scenario() -> None:
+            await asyncio.sleep(0.05)
+            await remote_t.send(encode(Hello(version="0.1.0", role="remote")))
+            await asyncio.sleep(0.05)
+
+            for _ in range(3):
+                backend.feed_event(
+                    MouseEvent(
+                        dx=0, dy=0, abs_x=1918, abs_y=540,
+                        is_injected=False, ts=time.monotonic(),
+                    )
+                )
+                await asyncio.sleep(0.02)
+
+            await asyncio.sleep(0.05)
+            await remote_t.send(encode(OwnershipGrant(ts=time.monotonic())))
+            await asyncio.sleep(0.05)
+
+            backend.feed_click_event(
+                MouseClickEvent(
+                    button="middle", pressed=True,
+                    abs_x=1918, abs_y=540,
+                    is_injected=False, ts=time.monotonic(),
+                )
+            )
+            await asyncio.sleep(0.02)
+            backend.feed_click_event(
+                MouseClickEvent(
+                    button="middle", pressed=False,
+                    abs_x=1918, abs_y=540,
+                    is_injected=False, ts=time.monotonic(),
+                )
+            )
+            await asyncio.sleep(0.1)
+            await host_t.close()
+
+        await asyncio.gather(_drive(), _scenario(), return_exceptions=True)
+
+        sent_messages = [decode(f) for f in host_t.sent_frames]
+        clicks = [m for m in sent_messages if isinstance(m, MouseClick)]
+        middle_clicks = [c for c in clicks if c.button == "middle"]
+        assert len(middle_clicks) >= 2
+
+
+class TestHostDragSequence:
+    """Drag = press + move + release forwarded while CONTROLLING."""
+
+    async def test_drag_sequence_forwarded(self) -> None:
+        """Press → Move → Release sequence produces correct frame sequence."""
+        from eou.host import Host
+        from eou.protocol.codec import decode, encode
+        from eou.protocol.messages import Hello, MouseClick, MouseMove, OwnershipGrant
+
+        host_t, remote_t = _make_fake_transport_pair()
+        visibility = FakeCursorVisibility()
+        backend = FakeMouseBackend()
+        backend._position = (1918, 540)
+
+        host = Host(
+            transport=host_t,
+            backend=backend,
+            visibility=visibility,
+            edge_config=_edge_right(),
+            takeback_config=_takeback_config(),
+        )
+
+        async def _drive() -> None:
+            await asyncio.wait_for(host.run(), timeout=2.0)
+
+        async def _scenario() -> None:
+            await asyncio.sleep(0.05)
+            await remote_t.send(encode(Hello(version="0.1.0", role="remote")))
+            await asyncio.sleep(0.05)
+
+            for _ in range(3):
+                backend.feed_event(
+                    MouseEvent(
+                        dx=0, dy=0, abs_x=1918, abs_y=540,
+                        is_injected=False, ts=time.monotonic(),
+                    )
+                )
+                await asyncio.sleep(0.02)
+
+            await asyncio.sleep(0.05)
+            await remote_t.send(encode(OwnershipGrant(ts=time.monotonic())))
+            await asyncio.sleep(0.05)
+
+            # Press left button
+            backend.feed_click_event(
+                MouseClickEvent(
+                    button="left", pressed=True,
+                    abs_x=1918, abs_y=540,
+                    is_injected=False, ts=time.monotonic(),
+                )
+            )
+            await asyncio.sleep(0.02)
+
+            # Move while pressed (drag)
+            for i in range(3):
+                backend.feed_event(
+                    MouseEvent(
+                        dx=10, dy=5, abs_x=1918 + 10 * (i + 1), abs_y=540 + 5 * (i + 1),
+                        is_injected=False, ts=time.monotonic(),
+                    )
+                )
+                await asyncio.sleep(0.02)
+
+            # Release
+            backend.feed_click_event(
+                MouseClickEvent(
+                    button="left", pressed=False,
+                    abs_x=1948, abs_y=555,
+                    is_injected=False, ts=time.monotonic(),
+                )
+            )
+            await asyncio.sleep(0.1)
+            await host_t.close()
+
+        await asyncio.gather(_drive(), _scenario(), return_exceptions=True)
+
+        sent_messages = [decode(f) for f in host_t.sent_frames]
+        # Filter to only click and move messages (skip Hello/OwnershipRequest)
+        drag_msgs = [
+            m for m in sent_messages
+            if isinstance(m, (MouseClick, MouseMove))
+        ]
+        assert len(drag_msgs) >= 5  # 1 press + 3 moves + 1 release
+        # First should be press, last should be release
+        assert isinstance(drag_msgs[0], MouseClick)
+        assert drag_msgs[0].pressed is True
+        assert isinstance(drag_msgs[-1], MouseClick)
+        assert drag_msgs[-1].pressed is False
+        # Middle should contain moves
+        moves = [m for m in drag_msgs if isinstance(m, MouseMove)]
+        assert len(moves) >= 3
 
 
 class TestHostTransportDisconnect:

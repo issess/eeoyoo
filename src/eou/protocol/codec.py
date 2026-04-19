@@ -31,7 +31,9 @@ from eou.protocol.messages import (
     AnyMessage,
     Heartbeat,
     Hello,
+    MouseClick,
     MouseMove,
+    MouseScroll,
     OwnershipGrant,
     OwnershipRequest,
     SessionEnd,
@@ -81,6 +83,8 @@ class MalformedMessageError(ProtocolError):
 _TYPE_MAP: dict[str, type] = {
     "HELLO": Hello,
     "MOUSE_MOVE": MouseMove,
+    "MOUSE_CLICK": MouseClick,
+    "MOUSE_SCROLL": MouseScroll,
     "OWNERSHIP_REQUEST": OwnershipRequest,
     "OWNERSHIP_GRANT": OwnershipGrant,
     "SESSION_END": SessionEnd,
@@ -91,6 +95,8 @@ _TYPE_MAP: dict[str, type] = {
 _REQUIRED_FIELDS: dict[str, frozenset[str]] = {
     "HELLO": frozenset({"version", "role"}),
     "MOUSE_MOVE": frozenset({"dx", "dy", "ts"}),
+    "MOUSE_CLICK": frozenset({"button", "pressed", "ts"}),
+    "MOUSE_SCROLL": frozenset({"dx", "dy", "ts"}),
     "OWNERSHIP_REQUEST": frozenset({"ts"}),
     "OWNERSHIP_GRANT": frozenset({"ts"}),
     "SESSION_END": frozenset({"reason", "ts"}),

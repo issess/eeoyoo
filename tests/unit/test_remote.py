@@ -157,6 +157,290 @@ class TestRemoteMouseMoveInjection:
         assert len(backend.move_calls) >= 1
 
 
+class TestRemoteMouseClickInjection:
+    """MouseClick frames received while CONTROLLED call injector.inject_click()."""
+
+    async def test_mouse_click_frame_calls_backend_click(self) -> None:
+        """MOUSE_CLICK received → backend.click(button, pressed) called."""
+        from eou.protocol.codec import encode
+        from eou.protocol.messages import Hello, MouseClick, OwnershipRequest
+        from eou.remote import Remote
+
+        remote_t, host_t = FakeTransport.make_pair()
+        visibility = FakeCursorVisibility()
+        backend = FakeMouseBackend()
+
+        remote = Remote(
+            transport=remote_t,
+            backend=backend,
+            visibility=visibility,
+            edge_config=_edge_left(),
+            takeback_config=_takeback_config(),
+        )
+
+        async def _drive() -> None:
+            await asyncio.wait_for(remote.run(), timeout=2.0)
+
+        async def _scenario() -> None:
+            await asyncio.sleep(0.05)
+            await host_t.send(encode(Hello(version="0.1.0", role="host")))
+            await asyncio.sleep(0.05)
+            await host_t.send(encode(OwnershipRequest(ts=time.monotonic())))
+            await asyncio.sleep(0.05)
+            # Send click frames
+            await host_t.send(
+                encode(MouseClick(button="left", pressed=True, ts=time.monotonic()))
+            )
+            await asyncio.sleep(0.02)
+            await host_t.send(
+                encode(MouseClick(button="left", pressed=False, ts=time.monotonic()))
+            )
+            await asyncio.sleep(0.02)
+            await host_t.send(
+                encode(MouseClick(button="right", pressed=True, ts=time.monotonic()))
+            )
+            await asyncio.sleep(0.02)
+            await host_t.send(
+                encode(MouseClick(button="right", pressed=False, ts=time.monotonic()))
+            )
+            await asyncio.sleep(0.1)
+            await remote_t.close()
+
+        await asyncio.gather(_drive(), _scenario(), return_exceptions=True)
+
+        assert len(backend.click_calls) >= 2
+        assert ("left", True) in backend.click_calls
+        assert ("left", False) in backend.click_calls
+
+    async def test_mouse_click_ignored_when_idle(self) -> None:
+        """MOUSE_CLICK received while IDLE does not call backend.click()."""
+        from eou.protocol.codec import encode
+        from eou.protocol.messages import Hello, MouseClick
+        from eou.remote import Remote
+
+        remote_t, host_t = FakeTransport.make_pair()
+        visibility = FakeCursorVisibility()
+        backend = FakeMouseBackend()
+
+        remote = Remote(
+            transport=remote_t,
+            backend=backend,
+            visibility=visibility,
+            edge_config=_edge_left(),
+            takeback_config=_takeback_config(),
+        )
+
+        async def _drive() -> None:
+            await asyncio.wait_for(remote.run(), timeout=1.5)
+
+        async def _scenario() -> None:
+            await asyncio.sleep(0.05)
+            await host_t.send(encode(Hello(version="0.1.0", role="host")))
+            await asyncio.sleep(0.05)
+            # Send click WITHOUT OwnershipRequest (still IDLE)
+            await host_t.send(
+                encode(MouseClick(button="left", pressed=True, ts=time.monotonic()))
+            )
+            await asyncio.sleep(0.1)
+            await remote_t.close()
+
+        await asyncio.gather(_drive(), _scenario(), return_exceptions=True)
+
+        assert len(backend.click_calls) == 0
+
+
+class TestRemoteMouseScrollInjection:
+    """MouseScroll frames received while CONTROLLED call injector.inject_scroll()."""
+
+    async def test_mouse_scroll_frame_calls_backend_scroll(self) -> None:
+        """MOUSE_SCROLL received → backend.scroll(dx, dy) called."""
+        from eou.protocol.codec import encode
+        from eou.protocol.messages import Hello, MouseScroll, OwnershipRequest
+        from eou.remote import Remote
+
+        remote_t, host_t = FakeTransport.make_pair()
+        visibility = FakeCursorVisibility()
+        backend = FakeMouseBackend()
+
+        remote = Remote(
+            transport=remote_t,
+            backend=backend,
+            visibility=visibility,
+            edge_config=_edge_left(),
+            takeback_config=_takeback_config(),
+        )
+
+        async def _drive() -> None:
+            await asyncio.wait_for(remote.run(), timeout=2.0)
+
+        async def _scenario() -> None:
+            await asyncio.sleep(0.05)
+            await host_t.send(encode(Hello(version="0.1.0", role="host")))
+            await asyncio.sleep(0.05)
+            await host_t.send(encode(OwnershipRequest(ts=time.monotonic())))
+            await asyncio.sleep(0.05)
+            # Send scroll frames
+            await host_t.send(
+                encode(MouseScroll(dx=0, dy=-3, ts=time.monotonic()))
+            )
+            await asyncio.sleep(0.02)
+            await host_t.send(
+                encode(MouseScroll(dx=2, dy=0, ts=time.monotonic()))
+            )
+            await asyncio.sleep(0.1)
+            await remote_t.close()
+
+        await asyncio.gather(_drive(), _scenario(), return_exceptions=True)
+
+        assert len(backend.scroll_calls) >= 2
+        assert (0, -3) in backend.scroll_calls
+        assert (2, 0) in backend.scroll_calls
+
+    async def test_mouse_scroll_ignored_when_idle(self) -> None:
+        """MOUSE_SCROLL received while IDLE does not call backend.scroll()."""
+        from eou.protocol.codec import encode
+        from eou.protocol.messages import Hello, MouseScroll
+        from eou.remote import Remote
+
+        remote_t, host_t = FakeTransport.make_pair()
+        visibility = FakeCursorVisibility()
+        backend = FakeMouseBackend()
+
+        remote = Remote(
+            transport=remote_t,
+            backend=backend,
+            visibility=visibility,
+            edge_config=_edge_left(),
+            takeback_config=_takeback_config(),
+        )
+
+        async def _drive() -> None:
+            await asyncio.wait_for(remote.run(), timeout=1.5)
+
+        async def _scenario() -> None:
+            await asyncio.sleep(0.05)
+            await host_t.send(encode(Hello(version="0.1.0", role="host")))
+            await asyncio.sleep(0.05)
+            await host_t.send(
+                encode(MouseScroll(dx=0, dy=-1, ts=time.monotonic()))
+            )
+            await asyncio.sleep(0.1)
+            await remote_t.close()
+
+        await asyncio.gather(_drive(), _scenario(), return_exceptions=True)
+
+        assert len(backend.scroll_calls) == 0
+
+
+class TestRemoteMiddleClickInjection:
+    """Middle-click frames received while CONTROLLED call injector.inject_click()."""
+
+    async def test_middle_click_frame_calls_backend_click(self) -> None:
+        """MOUSE_CLICK(button='middle') received → backend.click('middle', ...) called."""
+        from eou.protocol.codec import encode
+        from eou.protocol.messages import Hello, MouseClick, OwnershipRequest
+        from eou.remote import Remote
+
+        remote_t, host_t = FakeTransport.make_pair()
+        visibility = FakeCursorVisibility()
+        backend = FakeMouseBackend()
+
+        remote = Remote(
+            transport=remote_t,
+            backend=backend,
+            visibility=visibility,
+            edge_config=_edge_left(),
+            takeback_config=_takeback_config(),
+        )
+
+        async def _drive() -> None:
+            await asyncio.wait_for(remote.run(), timeout=2.0)
+
+        async def _scenario() -> None:
+            await asyncio.sleep(0.05)
+            await host_t.send(encode(Hello(version="0.1.0", role="host")))
+            await asyncio.sleep(0.05)
+            await host_t.send(encode(OwnershipRequest(ts=time.monotonic())))
+            await asyncio.sleep(0.05)
+            await host_t.send(
+                encode(MouseClick(button="middle", pressed=True, ts=time.monotonic()))
+            )
+            await asyncio.sleep(0.02)
+            await host_t.send(
+                encode(MouseClick(button="middle", pressed=False, ts=time.monotonic()))
+            )
+            await asyncio.sleep(0.1)
+            await remote_t.close()
+
+        await asyncio.gather(_drive(), _scenario(), return_exceptions=True)
+
+        assert ("middle", True) in backend.click_calls
+        assert ("middle", False) in backend.click_calls
+
+
+class TestRemoteDragInjection:
+    """Drag sequence (click press + moves + click release) injected while CONTROLLED."""
+
+    async def test_drag_sequence_injected(self) -> None:
+        """Press → Move → Release sequence calls backend in correct order."""
+        from eou.protocol.codec import encode
+        from eou.protocol.messages import (
+            Hello,
+            MouseClick,
+            MouseMove,
+            OwnershipRequest,
+        )
+        from eou.remote import Remote
+
+        remote_t, host_t = FakeTransport.make_pair()
+        visibility = FakeCursorVisibility()
+        backend = FakeMouseBackend()
+
+        remote = Remote(
+            transport=remote_t,
+            backend=backend,
+            visibility=visibility,
+            edge_config=_edge_left(),
+            takeback_config=_takeback_config(),
+        )
+
+        async def _drive() -> None:
+            await asyncio.wait_for(remote.run(), timeout=2.0)
+
+        async def _scenario() -> None:
+            await asyncio.sleep(0.05)
+            await host_t.send(encode(Hello(version="0.1.0", role="host")))
+            await asyncio.sleep(0.05)
+            await host_t.send(encode(OwnershipRequest(ts=time.monotonic())))
+            await asyncio.sleep(0.05)
+
+            # Press
+            await host_t.send(
+                encode(MouseClick(button="left", pressed=True, ts=time.monotonic()))
+            )
+            await asyncio.sleep(0.02)
+
+            # Move (drag)
+            for _ in range(3):
+                await host_t.send(
+                    encode(MouseMove(dx=10, dy=5, abs_x=100, abs_y=200, ts=time.monotonic()))
+                )
+                await asyncio.sleep(0.02)
+
+            # Release
+            await host_t.send(
+                encode(MouseClick(button="left", pressed=False, ts=time.monotonic()))
+            )
+            await asyncio.sleep(0.1)
+            await remote_t.close()
+
+        await asyncio.gather(_drive(), _scenario(), return_exceptions=True)
+
+        assert ("left", True) in backend.click_calls
+        assert ("left", False) in backend.click_calls
+        assert len(backend.move_calls) >= 3
+
+
 class TestRemoteTakeback:
     """Physical local input while CONTROLLED triggers takeback."""
 

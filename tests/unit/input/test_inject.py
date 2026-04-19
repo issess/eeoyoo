@@ -87,3 +87,63 @@ class TestMouseInjector:
         inj = MouseInjector(backend=fb)
         inj.inject_move(0, 0)
         assert (0, 0) in fb.move_calls
+
+    def test_inject_click_left_press(self) -> None:
+        """inject_click('left', True) calls backend.click('left', True)."""
+        from eou.input.inject import MouseInjector
+        from tests.fakes.mouse import FakeMouseBackend
+
+        fb = FakeMouseBackend()
+        inj = MouseInjector(backend=fb)
+        inj.inject_click("left", True)
+        assert ("left", True) in fb.click_calls
+
+    def test_inject_click_right_release(self) -> None:
+        """inject_click('right', False) calls backend.click('right', False)."""
+        from eou.input.inject import MouseInjector
+        from tests.fakes.mouse import FakeMouseBackend
+
+        fb = FakeMouseBackend()
+        inj = MouseInjector(backend=fb)
+        inj.inject_click("right", False)
+        assert ("right", False) in fb.click_calls
+
+    def test_inject_click_middle(self) -> None:
+        """inject_click('middle', True) calls backend.click('middle', True)."""
+        from eou.input.inject import MouseInjector
+        from tests.fakes.mouse import FakeMouseBackend
+
+        fb = FakeMouseBackend()
+        inj = MouseInjector(backend=fb)
+        inj.inject_click("middle", True)
+        assert ("middle", True) in fb.click_calls
+
+    def test_inject_click_invalid_button_raises(self) -> None:
+        """inject_click with unknown button raises ValueError."""
+        from eou.input.inject import MouseInjector
+        from tests.fakes.mouse import FakeMouseBackend
+
+        fb = FakeMouseBackend()
+        inj = MouseInjector(backend=fb)
+        with pytest.raises(ValueError, match="Unknown button"):
+            inj.inject_click("x2", True)
+
+    def test_inject_scroll_vertical(self) -> None:
+        """inject_scroll(0, -3) calls backend.scroll(0, -3)."""
+        from eou.input.inject import MouseInjector
+        from tests.fakes.mouse import FakeMouseBackend
+
+        fb = FakeMouseBackend()
+        inj = MouseInjector(backend=fb)
+        inj.inject_scroll(0, -3)
+        assert (0, -3) in fb.scroll_calls
+
+    def test_inject_scroll_horizontal(self) -> None:
+        """inject_scroll(2, 0) calls backend.scroll(2, 0)."""
+        from eou.input.inject import MouseInjector
+        from tests.fakes.mouse import FakeMouseBackend
+
+        fb = FakeMouseBackend()
+        inj = MouseInjector(backend=fb)
+        inj.inject_scroll(2, 0)
+        assert (2, 0) in fb.scroll_calls
